@@ -36,7 +36,7 @@ export const MODULE_REGISTRY: ModuleDefinition[] = [
     name: "AI Planner",
     description:
       "Goal → observe → plan → act loop. Coordinates other modules to complete user tasks.",
-    status: "planned",
+    status: "alpha",
     requiredScopes: ["ai:generate"],
     ownerMilestone: 3,
   },
