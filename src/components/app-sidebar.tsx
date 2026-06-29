@@ -9,6 +9,7 @@ import {
   Settings,
   ScrollText,
   Terminal,
+  Brain,
 } from "lucide-react";
 
 import {
@@ -28,6 +29,7 @@ const mainItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Chat", url: "/chat", icon: MessagesSquare },
   { title: "Tasks", url: "/tasks", icon: ListChecks },
+  { title: "Memory", url: "/memory", icon: Brain },
 ];
 
 const systemItems = [
@@ -53,7 +55,7 @@ export function AppSidebar() {
           <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="font-mono text-sm font-semibold tracking-tight">OpenAgent</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              Milestone 1
+              Milestone 3
             </span>
           </div>
         </div>
