@@ -15,15 +15,21 @@ previous one.
 - Module interface contracts under `src/modules/*` (stubs only)
 - Docs: architecture, milestones, modules
 
-## ⏳ Milestone 2 — Memory & Tasks
-- Wire `tasks`, `memory`, `logs` modules to DB
-- Saved workflows, preferences, frequent sites
-- Real activity log on every module action
+## ✅ Milestone 2 — Memory & Tasks
+- `tasks`, `memory`, `logs` modules wired to the database.
+- New `memories` table (workflow, preference, site, note, fact).
+- Memory page: add / pin / remove entries.
+- Tasks page: create / cancel goals; statuses update through the module API.
+- Every module mutation writes a row to `activity_logs` via `lib/logger.ts`.
 
-## ⏳ Milestone 3 — AI Planner
-- Goal → observe → plan → act loop via Lovable AI Gateway
-- Streaming chat replies (AI SDK + TanStack server route)
-- Tool-call rendering, retries, plan inspection
+## ✅ Milestone 3 — AI Planner
+- Lovable AI Gateway provider helper (`lib/ai-gateway.server.ts`).
+- `/api/chat` TanStack server route streams via AI SDK (`streamText`,
+  `convertToModelMessages`, `toUIMessageStreamResponse`).
+- Chat UI uses `useChat` + `DefaultChatTransport`, renders `message.parts`
+  with markdown, persists assistant messages (parts included) on finish.
+- Tools: `save_memory`, `create_task` — applied client-side by the planner
+  loop so the agent can remember things and track goals from chat.
 
 ## ⏳ Milestone 4 — Browser Controller
 - Server-side browser automation (open, navigate, read DOM, click, fill)
