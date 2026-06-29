@@ -56,7 +56,7 @@ export const memory: MemoryStore = {
     if (!u.user) throw new Error("Not signed in");
     const { data, error } = await supabase
       .from("memories")
-      .insert({ user_id: u.user.id, kind, label, value: value as object })
+      .insert({ user_id: u.user.id, kind, label, value: value as never })
       .select("id, kind, label, value, pinned, created_at, updated_at")
       .single();
     if (error) throw error;

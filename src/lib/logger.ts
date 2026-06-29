@@ -23,7 +23,7 @@ export async function logActivity(entry: LogInput): Promise<void> {
       module: entry.module,
       level: entry.level ?? "info",
       message: entry.message,
-      metadata: entry.metadata ?? null,
+      metadata: (entry.metadata ?? null) as never,
     });
   } catch (err) {
     if (typeof console !== "undefined") console.warn("[logger]", err);

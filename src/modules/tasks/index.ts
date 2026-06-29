@@ -58,12 +58,12 @@ export const tasks: TaskManager = {
   },
 
   async update(id, patch) {
-    const update: Record<string, unknown> = {};
+    const update: { status?: TaskStatus; result?: unknown } = {};
     if (patch.status !== undefined) update.status = patch.status;
     if (patch.result !== undefined) update.result = patch.result;
     const { data, error } = await supabase
       .from("tasks")
-      .update(update)
+      .update(update as never)
       .eq("id", id)
       .select("id, goal, status, result, created_at, updated_at")
       .single();
