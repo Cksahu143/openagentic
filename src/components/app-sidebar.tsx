@@ -10,6 +10,7 @@ import {
   ScrollText,
   Terminal,
   Brain,
+  Folder,
 } from "lucide-react";
 
 import {
@@ -30,6 +31,7 @@ const mainItems = [
   { title: "Chat", url: "/chat", icon: MessagesSquare },
   { title: "Tasks", url: "/tasks", icon: ListChecks },
   { title: "Memory", url: "/memory", icon: Brain },
+  { title: "Files", url: "/files", icon: Folder },
 ];
 
 const systemItems = [
@@ -39,6 +41,7 @@ const systemItems = [
   { title: "Logs", url: "/logs", icon: ScrollText },
   { title: "Settings", url: "/settings", icon: Settings },
 ];
+
 
 export function AppSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -55,7 +58,7 @@ export function AppSidebar() {
           <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="font-mono text-sm font-semibold tracking-tight">OpenAgent</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              Milestone 3
+              Milestone 5
             </span>
           </div>
         </div>

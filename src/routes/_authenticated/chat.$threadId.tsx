@@ -23,6 +23,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { logActivity } from "@/lib/logger";
 import { memory, type MemoryKind } from "@/modules/memory";
 import { tasks } from "@/modules/tasks";
+import { files } from "@/modules/files";
+
 
 export const Route = createFileRoute("/_authenticated/chat/$threadId")({
   head: () => ({ meta: [{ title: "Chat · OpenAgent" }] }),
@@ -129,6 +131,15 @@ function ChatThread() {
             const { goal } = part.input as { goal: string };
             await tasks.create(goal).catch(() => {});
           }
+          if (part.type === "tool-write_file" && part.state === "input-available") {
+            const { path, content, contentType } = part.input as {
+              path: string;
+              content: string;
+              contentType?: string;
+            };
+            await files.write(path, content, contentType).catch(() => {});
+          }
+
         }
 
         await supabase

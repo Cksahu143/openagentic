@@ -44,11 +44,12 @@ export const MODULE_REGISTRY: ModuleDefinition[] = [
     id: "browser",
     name: "Browser Controller",
     description:
-      "Headless browser automation: navigation, DOM reading, clicking, forms, downloads.",
-    status: "planned",
-    requiredScopes: ["browser:navigate", "browser:interact"],
+      "Server-side fetch + HTML reader. Lets the agent visit URLs, read pages, check links, call public APIs.",
+    status: "alpha",
+    requiredScopes: ["browser:navigate"],
     ownerMilestone: 4,
   },
+
   {
     id: "companion",
     name: "Local Companion",
@@ -71,11 +72,12 @@ export const MODULE_REGISTRY: ModuleDefinition[] = [
     id: "files",
     name: "File Manager",
     description:
-      "Read/write/upload/download user files, with explicit per-path permission grants.",
-    status: "planned",
+      "Private per-user file storage. The agent can list, read, and write documents (reports, datasets, snippets).",
+    status: "alpha",
     requiredScopes: ["files:read", "files:write"],
     ownerMilestone: 5,
   },
+
   {
     id: "tasks",
     name: "Task Manager",

@@ -19,6 +19,7 @@ import { Route as AuthenticatedProvidersRouteImport } from './routes/_authentica
 import { Route as AuthenticatedPermissionsRouteImport } from './routes/_authenticated/permissions'
 import { Route as AuthenticatedMemoryRouteImport } from './routes/_authenticated/memory'
 import { Route as AuthenticatedLogsRouteImport } from './routes/_authenticated/logs'
+import { Route as AuthenticatedFilesRouteImport } from './routes/_authenticated/files'
 import { Route as AuthenticatedDevicesRouteImport } from './routes/_authenticated/devices'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedChatIndexRouteImport } from './routes/_authenticated/chat.index'
@@ -74,6 +75,11 @@ const AuthenticatedLogsRoute = AuthenticatedLogsRouteImport.update({
   path: '/logs',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedFilesRoute = AuthenticatedFilesRouteImport.update({
+  id: '/files',
+  path: '/files',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedDevicesRoute = AuthenticatedDevicesRouteImport.update({
   id: '/devices',
   path: '/devices',
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/devices': typeof AuthenticatedDevicesRoute
+  '/files': typeof AuthenticatedFilesRoute
   '/logs': typeof AuthenticatedLogsRoute
   '/memory': typeof AuthenticatedMemoryRoute
   '/permissions': typeof AuthenticatedPermissionsRoute
@@ -116,6 +123,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/devices': typeof AuthenticatedDevicesRoute
+  '/files': typeof AuthenticatedFilesRoute
   '/logs': typeof AuthenticatedLogsRoute
   '/memory': typeof AuthenticatedMemoryRoute
   '/permissions': typeof AuthenticatedPermissionsRoute
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   '/auth': typeof AuthRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/devices': typeof AuthenticatedDevicesRoute
+  '/_authenticated/files': typeof AuthenticatedFilesRoute
   '/_authenticated/logs': typeof AuthenticatedLogsRoute
   '/_authenticated/memory': typeof AuthenticatedMemoryRoute
   '/_authenticated/permissions': typeof AuthenticatedPermissionsRoute
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/dashboard'
     | '/devices'
+    | '/files'
     | '/logs'
     | '/memory'
     | '/permissions'
@@ -165,6 +175,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/dashboard'
     | '/devices'
+    | '/files'
     | '/logs'
     | '/memory'
     | '/permissions'
@@ -181,6 +192,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/_authenticated/dashboard'
     | '/_authenticated/devices'
+    | '/_authenticated/files'
     | '/_authenticated/logs'
     | '/_authenticated/memory'
     | '/_authenticated/permissions'
@@ -271,6 +283,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedLogsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/files': {
+      id: '/_authenticated/files'
+      path: '/files'
+      fullPath: '/files'
+      preLoaderRoute: typeof AuthenticatedFilesRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/devices': {
       id: '/_authenticated/devices'
       path: '/devices'
@@ -305,6 +324,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedDevicesRoute: typeof AuthenticatedDevicesRoute
+  AuthenticatedFilesRoute: typeof AuthenticatedFilesRoute
   AuthenticatedLogsRoute: typeof AuthenticatedLogsRoute
   AuthenticatedMemoryRoute: typeof AuthenticatedMemoryRoute
   AuthenticatedPermissionsRoute: typeof AuthenticatedPermissionsRoute
@@ -318,6 +338,7 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedDevicesRoute: AuthenticatedDevicesRoute,
+  AuthenticatedFilesRoute: AuthenticatedFilesRoute,
   AuthenticatedLogsRoute: AuthenticatedLogsRoute,
   AuthenticatedMemoryRoute: AuthenticatedMemoryRoute,
   AuthenticatedPermissionsRoute: AuthenticatedPermissionsRoute,

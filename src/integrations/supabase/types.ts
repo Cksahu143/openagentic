@@ -199,6 +199,42 @@ export type Database = {
         }
         Relationships: []
       }
+      provider_keys: {
+        Row: {
+          api_key: string
+          base_url: string | null
+          created_at: string
+          id: string
+          is_default: boolean
+          label: string | null
+          provider: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          api_key: string
+          base_url?: string | null
+          created_at?: string
+          id?: string
+          is_default?: boolean
+          label?: string | null
+          provider: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          api_key?: string
+          base_url?: string | null
+          created_at?: string
+          id?: string
+          is_default?: boolean
+          label?: string | null
+          provider?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       tasks: {
         Row: {
           created_at: string
