@@ -31,14 +31,24 @@ previous one.
 - Tools: `save_memory`, `create_task` — applied client-side by the planner
   loop so the agent can remember things and track goals from chat.
 
-## ⏳ Milestone 4 — Browser Controller
-- Server-side browser automation (open, navigate, read DOM, click, fill)
-- Tabs, downloads/uploads, simple error recovery
-- New permission scopes: `browser:navigate`, `browser:interact`
+## ✅ Milestone 4 — Browser-lite & Code Runner
+- Server-side `fetchUrl` helper (title, readable text, status, outgoing
+  links, redirect chain) with SSRF guard + 15s / 1.5MB caps.
+- Sandboxed JS code runner (`runJs`) with 5s timeout and captured console.
+- Both wired into `/api/chat` as server-executing tools (`fetch_url`,
+  `run_code`) so the planner can do real research, link/health checks,
+  and quick computations end-to-end.
 
-## ⏳ Milestone 5 — Files & BYO Providers
-- File manager with explicit per-path grants
-- Bring-your-own API keys (Anthropic, OpenRouter, custom endpoints)
+## ✅ Milestone 5 — Files, BYO providers & sub-AI
+- Private per-user storage bucket `user-files` with RLS scoped to the
+  user's folder. `files` module + Files page (create / view / download /
+  delete). Planner can `write_file`, `read_file`, `list_files`.
+- BYO provider keys: `provider_keys` table + Providers UI to add OpenAI,
+  Anthropic, OpenRouter or custom OpenAI-compatible endpoints. Lovable
+  AI remains the zero-config default.
+- `ask_ai` tool: agent can delegate sub-prompts to another model on the
+  Lovable AI Gateway (user needs no key of their own).
+
 
 ## ⏳ Milestone 6 — Local Companion
 - Installable desktop app with signed loopback channel
