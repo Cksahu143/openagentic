@@ -11,11 +11,12 @@ const TIMEOUT_MS = 5000;
 
 export interface RunCodeResult {
   ok: boolean;
-  result: unknown;
+  result: string;
   logs: string[];
   error: string | null;
   elapsedMs: number;
 }
+
 
 export async function runJs(code: string): Promise<RunCodeResult> {
   const started = Date.now();
@@ -42,16 +43,18 @@ export async function runJs(code: string): Promise<RunCodeResult> {
 
     return {
       ok: true,
-      result: safe(result),
+      result: stringify(result),
       logs,
       error: null,
       elapsedMs: Date.now() - started,
     };
+
   } catch (err) {
     return {
       ok: false,
-      result: null,
+      result: "",
       logs,
+
       error: err instanceof Error ? err.message : String(err),
       elapsedMs: Date.now() - started,
     };
@@ -74,3 +77,5 @@ function safe(v: unknown): unknown {
     return String(v);
   }
 }
+void safe;
+
