@@ -36,9 +36,16 @@ Companion browser tools (real control of the user's Chrome via the paired extens
 - companion_read_active_tab / companion_read_tab: plain-text page read
 - companion_search_web: shortcut that opens a search results page
 
+Session tools (ALWAYS use for multi-step goals so the user's Workspace stays live):
+- plan_session({ steps: [...] }) — call FIRST for any multi-step goal
+- set_reasoning({ reasoning }) — record short chain-of-thought before actions
+- update_step({ index, status }) — mark step running/done/failed/skipped
+- complete_session({ summary }) — mark the whole goal done
+
 RULES:
-- For "open X and do Y" (e.g. "Open YouTube and search for Python tutorial"): navigate → get_dom → find search box → fill(value, submit:true) → wait_for results → get_dom → click best result. DO NOT just open a pre-built ?search_query= URL and stop.
+- For "open X and do Y": plan_session first, then navigate → get_dom → find search box → fill(value, submit:true) → wait_for results → get_dom → click best result. DO NOT open a pre-built ?search_query= URL and stop.
 - Always call get_dom before click/fill on a new page — never invent refs.
+- If an action fails: read the error, set_reasoning with a recovery plan, retry with an alternative (different ref/selector, wait_for, scroll, re-navigate). Ask the user only if recovery is impossible.
 - If a companion tool errors with "No companion device", tell the user to install & pair the extension (Devices page) and STOP.
 - Report progress in short markdown updates as you go.`;
 
@@ -58,7 +65,11 @@ export const Route = createFileRoute("/api/chat")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const body = (await request.json()) as { messages?: unknown };
+        const body = (await request.json()) as {
+          messages?: unknown;
+          threadId?: string;
+          sessionId?: string;
+        };
         if (!Array.isArray(body.messages)) {
           return new Response("messages required", { status: 400 });
         }
@@ -70,18 +81,106 @@ export const Route = createFileRoute("/api/chat")({
         const gateway = createLovableAiGatewayProvider(key);
         const model = gateway("google/gemini-3-flash-preview");
 
-        // Lazy-import companion helper (server-only)
         const { callCompanion } = await import("@/lib/companion.server");
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+        // --- Persistent Agent Session ---
+        let sessionId: string | null = body.sessionId ?? null;
+
+        async function ensureSession(goal: string): Promise<string | null> {
+          if (!userId) return null;
+          if (sessionId) return sessionId;
+          if (body.threadId) {
+            const { data: existing } = await supabaseAdmin
+              .from("agent_sessions")
+              .select("id")
+              .eq("user_id", userId)
+              .eq("thread_id", body.threadId)
+              .in("status", ["planning", "running", "waiting", "paused"])
+              .order("last_activity_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (existing?.id) { sessionId = existing.id; return sessionId; }
+          }
+          const { data: created } = await supabaseAdmin
+            .from("agent_sessions")
+            .insert({
+              user_id: userId,
+              thread_id: body.threadId ?? null,
+              goal: goal.slice(0, 500),
+              status: "running",
+            })
+            .select("id")
+            .single();
+          sessionId = created?.id ?? null;
+          return sessionId;
+        }
+
+        async function patchSession(patch: Record<string, unknown>) {
+          if (!sessionId) return;
+          await supabaseAdmin
+            .from("agent_sessions")
+            .update({ ...patch, last_activity_at: new Date().toISOString() })
+            .eq("id", sessionId);
+        }
+
+        async function appendTimeline(icon: string, label: string, detail?: unknown) {
+          if (!sessionId) return;
+          const { data: row } = await supabaseAdmin
+            .from("agent_sessions").select("timeline").eq("id", sessionId).maybeSingle();
+          const timeline = Array.isArray(row?.timeline) ? (row!.timeline as unknown[]) : [];
+          timeline.push({ t: Date.now(), icon, label, detail });
+          await patchSession({ timeline: timeline.slice(-200) as never });
+        }
+
+        async function appendTool(action: string, args: unknown, res: unknown) {
+          if (!sessionId) return;
+          const { data: row } = await supabaseAdmin
+            .from("agent_sessions").select("tool_history").eq("id", sessionId).maybeSingle();
+          const hist = Array.isArray(row?.tool_history) ? (row!.tool_history as unknown[]) : [];
+          hist.push({ t: Date.now(), action, args, result: res });
+          await patchSession({ tool_history: hist.slice(-100) as never });
+        }
+
+        // Bootstrap session from latest user message.
+        const uiMsgs = body.messages as UIMessage[];
+        const lastUser = [...uiMsgs].reverse().find((m) => m.role === "user");
+        if (lastUser) {
+          const text = lastUser.parts
+            .map((p) => (p.type === "text" ? p.text : "")).join(" ").trim();
+          if (text) {
+            await ensureSession(text);
+            await appendTimeline("🧠", "Goal received", { text: text.slice(0, 200) });
+          }
+        }
 
         const companionTool = (action: string, description: string, schema: z.ZodTypeAny) =>
           tool({
             description,
             inputSchema: schema,
             execute: async (args) => {
-              if (!userId) {
-                return { ok: false, error: "Not authenticated. Sign in first." };
+              if (!userId) return { ok: false, error: "Not authenticated. Sign in first." };
+              // Honor pause/cancel between actions.
+              if (sessionId) {
+                const { data: s } = await supabaseAdmin
+                  .from("agent_sessions").select("status").eq("id", sessionId).maybeSingle();
+                if (s?.status === "cancelled") return { ok: false, error: "Session cancelled by user." };
+                if (s?.status === "paused") return { ok: false, error: "Session paused. Resume from Workspace to continue." };
               }
-              return callCompanion(userId, action, args as Record<string, unknown>);
+              await appendTimeline("🛠", action, args);
+              const res = await callCompanion(userId, action, args as Record<string, unknown>);
+              await appendTool(action, args, res);
+              await appendTimeline(res.ok ? "✅" : "⚠️", `${action} ${res.ok ? "ok" : "failed"}`,
+                { error: res.error });
+              const r = res.result as { url?: string; tabId?: number } | undefined;
+              const patch: Record<string, unknown> = {};
+              if (r?.url) patch.current_url = r.url;
+              if (r?.tabId) patch.active_tab_id = r.tabId;
+              if (Object.keys(patch).length) await patchSession(patch);
+              if (!res.ok) {
+                await patchSession({ retry_count: undefined }); // no-op placeholder
+              }
+              return res;
             },
           });
 
@@ -91,6 +190,66 @@ export const Route = createFileRoute("/api/chat")({
           messages: await convertToModelMessages(body.messages as UIMessage[]),
           stopWhen: stepCountIs(50),
           tools: {
+            plan_session: tool({
+              description:
+                "FIRST STEP for any multi-step browser goal. Create a live task tree of ordered steps the agent will execute. Steps appear in the user's Workspace immediately.",
+              inputSchema: z.object({
+                steps: z.array(z.string().min(2).max(160)).min(1).max(20),
+              }),
+              execute: async ({ steps }) => {
+                const tree = steps.map((label, i) => ({ i, label, status: "pending" }));
+                await patchSession({ task_tree: tree as never, current_step: 0, status: "running" });
+                await appendTimeline("📋", "Plan created", { steps });
+                return { ok: true, sessionId, steps: tree };
+              },
+            }),
+            update_step: tool({
+              description:
+                "Mark a task-tree step as running / done / failed. Call this as you progress so the user's Workspace shows live progress.",
+              inputSchema: z.object({
+                index: z.number().int().min(0),
+                status: z.enum(["running", "done", "failed", "skipped"]),
+                note: z.string().max(400).optional(),
+              }),
+              execute: async ({ index, status, note }) => {
+                if (!sessionId) return { ok: false, error: "no session" };
+                const { data: row } = await supabaseAdmin
+                  .from("agent_sessions").select("task_tree").eq("id", sessionId).maybeSingle();
+                const tree = Array.isArray(row?.task_tree) ? (row!.task_tree as Array<Record<string, unknown>>) : [];
+                if (tree[index]) { tree[index].status = status; if (note) tree[index].note = note; }
+                await patchSession({ task_tree: tree as never, current_step: index });
+                await appendTimeline(
+                  status === "done" ? "✅" : status === "failed" ? "❌" : status === "skipped" ? "⏭" : "▶️",
+                  `Step ${index + 1}: ${status}`,
+                  { note },
+                );
+                return { ok: true };
+              },
+            }),
+            set_reasoning: tool({
+              description:
+                "Record your current chain-of-thought / reasoning so the user can see WHY the agent is doing what it's doing. Keep it short — 1-3 sentences.",
+              inputSchema: z.object({ reasoning: z.string().min(1).max(600) }),
+              execute: async ({ reasoning }) => {
+                await patchSession({ reasoning });
+                await appendTimeline("💭", "Thinking", { reasoning });
+                return { ok: true };
+              },
+            }),
+            complete_session: tool({
+              description: "Mark the current agent session complete when the goal is fully done.",
+              inputSchema: z.object({ summary: z.string().max(600).optional() }),
+              execute: async ({ summary }) => {
+                await patchSession({
+                  status: "completed",
+                  completed_at: new Date().toISOString(),
+                  reasoning: summary,
+                });
+                await appendTimeline("🎉", "Goal completed", { summary });
+                return { ok: true };
+              },
+            }),
+
             save_memory: tool({
               description:
                 "Save something the user wants the agent to remember (workflow, preference, site, note, fact).",

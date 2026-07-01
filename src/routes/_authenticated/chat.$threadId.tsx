@@ -97,6 +97,7 @@ function ChatThread() {
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
+        body: { threadId },
         fetch: async (url, init) => {
           const { data } = await supabase.auth.getSession();
           const headers = new Headers(init?.headers);
@@ -106,7 +107,7 @@ function ChatThread() {
           return fetch(url, { ...init, headers });
         },
       }),
-    [],
+    [threadId],
   );
 
   const { messages, sendMessage, status, setMessages, error } = useChat({
