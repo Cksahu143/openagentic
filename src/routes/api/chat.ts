@@ -58,7 +58,11 @@ export const Route = createFileRoute("/api/chat")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const body = (await request.json()) as { messages?: unknown };
+        const body = (await request.json()) as {
+          messages?: unknown;
+          threadId?: string;
+          sessionId?: string;
+        };
         if (!Array.isArray(body.messages)) {
           return new Response("messages required", { status: 400 });
         }
@@ -70,18 +74,106 @@ export const Route = createFileRoute("/api/chat")({
         const gateway = createLovableAiGatewayProvider(key);
         const model = gateway("google/gemini-3-flash-preview");
 
-        // Lazy-import companion helper (server-only)
         const { callCompanion } = await import("@/lib/companion.server");
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+        // --- Persistent Agent Session ---
+        let sessionId: string | null = body.sessionId ?? null;
+
+        async function ensureSession(goal: string): Promise<string | null> {
+          if (!userId) return null;
+          if (sessionId) return sessionId;
+          if (body.threadId) {
+            const { data: existing } = await supabaseAdmin
+              .from("agent_sessions")
+              .select("id")
+              .eq("user_id", userId)
+              .eq("thread_id", body.threadId)
+              .in("status", ["planning", "running", "waiting", "paused"])
+              .order("last_activity_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (existing?.id) { sessionId = existing.id; return sessionId; }
+          }
+          const { data: created } = await supabaseAdmin
+            .from("agent_sessions")
+            .insert({
+              user_id: userId,
+              thread_id: body.threadId ?? null,
+              goal: goal.slice(0, 500),
+              status: "running",
+            })
+            .select("id")
+            .single();
+          sessionId = created?.id ?? null;
+          return sessionId;
+        }
+
+        async function patchSession(patch: Record<string, unknown>) {
+          if (!sessionId) return;
+          await supabaseAdmin
+            .from("agent_sessions")
+            .update({ ...patch, last_activity_at: new Date().toISOString() })
+            .eq("id", sessionId);
+        }
+
+        async function appendTimeline(icon: string, label: string, detail?: unknown) {
+          if (!sessionId) return;
+          const { data: row } = await supabaseAdmin
+            .from("agent_sessions").select("timeline").eq("id", sessionId).maybeSingle();
+          const timeline = Array.isArray(row?.timeline) ? (row!.timeline as unknown[]) : [];
+          timeline.push({ t: Date.now(), icon, label, detail });
+          await patchSession({ timeline: timeline.slice(-200) as never });
+        }
+
+        async function appendTool(action: string, args: unknown, res: unknown) {
+          if (!sessionId) return;
+          const { data: row } = await supabaseAdmin
+            .from("agent_sessions").select("tool_history").eq("id", sessionId).maybeSingle();
+          const hist = Array.isArray(row?.tool_history) ? (row!.tool_history as unknown[]) : [];
+          hist.push({ t: Date.now(), action, args, result: res });
+          await patchSession({ tool_history: hist.slice(-100) as never });
+        }
+
+        // Bootstrap session from latest user message.
+        const uiMsgs = body.messages as UIMessage[];
+        const lastUser = [...uiMsgs].reverse().find((m) => m.role === "user");
+        if (lastUser) {
+          const text = lastUser.parts
+            .map((p) => (p.type === "text" ? p.text : "")).join(" ").trim();
+          if (text) {
+            await ensureSession(text);
+            await appendTimeline("🧠", "Goal received", { text: text.slice(0, 200) });
+          }
+        }
 
         const companionTool = (action: string, description: string, schema: z.ZodTypeAny) =>
           tool({
             description,
             inputSchema: schema,
             execute: async (args) => {
-              if (!userId) {
-                return { ok: false, error: "Not authenticated. Sign in first." };
+              if (!userId) return { ok: false, error: "Not authenticated. Sign in first." };
+              // Honor pause/cancel between actions.
+              if (sessionId) {
+                const { data: s } = await supabaseAdmin
+                  .from("agent_sessions").select("status").eq("id", sessionId).maybeSingle();
+                if (s?.status === "cancelled") return { ok: false, error: "Session cancelled by user." };
+                if (s?.status === "paused") return { ok: false, error: "Session paused. Resume from Workspace to continue." };
               }
-              return callCompanion(userId, action, args as Record<string, unknown>);
+              await appendTimeline("🛠", action, args);
+              const res = await callCompanion(userId, action, args as Record<string, unknown>);
+              await appendTool(action, args, res);
+              await appendTimeline(res.ok ? "✅" : "⚠️", `${action} ${res.ok ? "ok" : "failed"}`,
+                { error: res.error });
+              const r = res.result as { url?: string; tabId?: number } | undefined;
+              const patch: Record<string, unknown> = {};
+              if (r?.url) patch.current_url = r.url;
+              if (r?.tabId) patch.active_tab_id = r.tabId;
+              if (Object.keys(patch).length) await patchSession(patch);
+              if (!res.ok) {
+                await patchSession({ retry_count: undefined }); // no-op placeholder
+              }
+              return res;
             },
           });
 
