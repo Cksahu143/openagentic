@@ -1,5 +1,24 @@
 # OpenAgent Changelog
 
+## Milestone 9 (ultimate completion pass)
+
+### Added
+- **Reliable clicking** — `pageClick` (extension v0.3.1) scrolls the
+  target to center, settles a frame, verifies visibility, checks
+  occlusion via `elementFromPoint`, tries a native click, and — if
+  occluded and nothing changed — synthesizes a full
+  pointerdown/mousedown/pointerup/mouseup/click sequence at the rect
+  center. Returns `{ method, occluded, urlChanged, urlAfter }` so the
+  agent can verify without a second observation.
+- **Fast-path execution** — system prompt now differentiates simple,
+  high-confidence actions (click labelled element, type into labelled
+  field, select value, open known URL, switch tab) from ambiguous ones.
+  Fast path: reuse a <5 s-old observation, batch fills, skip
+  set_reasoning for trivial acts, use `urlChanged` from the click result
+  as verification. Full loop kicks back in on ambiguity or failure.
+- **VISION.md** and **docs/M9_VERIFICATION.md** — vision document and
+  per-requirement M9 verification report with manual test plan.
+
 ## Milestone 9 (reliability tuning)
 
 ### Changed
