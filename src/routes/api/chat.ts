@@ -332,25 +332,57 @@ export const Route = createFileRoute("/api/chat")({
             }),
             record_recovery: tool({
               description:
-                "Record a recovery attempt after an action failed. Increments retry_count and updates recovery_status shown in the Workspace.",
+                "Record a recovery attempt after an action failed. Increments retry_count and returns { attempt, backoffMs, capped, perStep, perSession }. Server enforces MAX_PER_STEP=4 and MAX_PER_SESSION=8; when capped:true STOP retrying that step and escalate (update_step failed, ask user, or move on).",
               inputSchema: z.object({
                 strategy: z.string().min(2).max(300),
-                attempt: z.number().int().min(1).max(10).optional(),
+                attempt: z.number().int().min(1).max(20).optional(),
+                stepIndex: z.number().int().min(0).max(200).optional(),
                 note: z.string().max(400).optional(),
               }),
-              execute: async ({ strategy, attempt, note }) => {
+              execute: async ({ strategy, attempt, stepIndex, note }) => {
                 if (!sessionId) return { ok: false };
+                const MAX_PER_STEP = 4;
+                const MAX_PER_SESSION = 8;
+                const BACKOFFS = [400, 800, 1600, 3200, 5000];
+
                 const { data: row } = await supabaseAdmin
-                  .from("agent_sessions").select("retry_count").eq("id", sessionId).maybeSingle();
-                const next = (row?.retry_count ?? 0) + 1;
+                  .from("agent_sessions")
+                  .select("retry_count, tool_history, current_step")
+                  .eq("id", sessionId)
+                  .maybeSingle();
+                const perSession = (row?.retry_count ?? 0) + 1;
+                const effectiveStep =
+                  typeof stepIndex === "number" ? stepIndex : (row?.current_step ?? 0);
+                // Count prior recovery events for this step from tool_history.
+                const history = Array.isArray(row?.tool_history) ? row!.tool_history as Array<Record<string, unknown>> : [];
+                const priorForStep = history.filter(
+                  (h) => h?.tool === "record_recovery" && (h?.stepIndex ?? -1) === effectiveStep,
+                ).length;
+                const perStep = priorForStep + 1;
+                const capped = perStep > MAX_PER_STEP || perSession > MAX_PER_SESSION;
+                const backoffMs = capped
+                  ? 0
+                  : BACKOFFS[Math.min(perStep - 1, BACKOFFS.length - 1)];
+
                 await patchSession({
-                  retry_count: attempt ?? next,
-                  recovery_status: strategy.slice(0, 300),
+                  retry_count: attempt ?? perSession,
+                  recovery_status: capped
+                    ? `CAPPED after ${perStep - 1} attempts on step ${effectiveStep}: ${strategy.slice(0, 240)}`
+                    : `${strategy.slice(0, 260)} (attempt ${perStep}/${MAX_PER_STEP}, backoff ${backoffMs}ms)`,
+                  waiting_status: capped ? null : `backoff ${backoffMs}ms`,
                 });
-                await appendTimeline("🔁", `Recovery: ${strategy}`, { note, attempt: attempt ?? next });
-                return { ok: true, attempt: attempt ?? next };
+                await appendTool("record_recovery", { strategy, stepIndex: effectiveStep, note }, { attempt: perStep, backoffMs, capped });
+                await appendTimeline(
+                  capped ? "🛑" : "🔁",
+                  capped
+                    ? `Recovery cap reached (step ${effectiveStep})`
+                    : `Recovery ${perStep}/${MAX_PER_STEP}: ${strategy}`,
+                  { note, backoffMs, perSession, perStep },
+                );
+                return { ok: true, attempt: perStep, backoffMs, capped, perStep, perSession };
               },
             }),
+
             set_browser_memory: tool({
               description:
                 "Merge fields into the current session's browser memory (visitedUrls, previousSearches, completedObjectives, currentObjective, knownTabs, notes). Arrays are unioned; scalars overwrite.",
