@@ -81,7 +81,7 @@ export function AgentActivity({ className }: { className?: string }) {
         (payload) => {
           const l = payload.new as ActivityRow;
           setRows((cur) =>
-            [{ ...l, kind: "log" }, ...cur].slice(0, MAX_ROWS),
+            [{ ...l, kind: "log" as const }, ...cur].slice(0, MAX_ROWS),
           );
         },
       )
