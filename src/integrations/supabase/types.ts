@@ -47,6 +47,7 @@ export type Database = {
       agent_sessions: {
         Row: {
           active_tab_id: number | null
+          browser_memory: Json
           completed_at: string | null
           created_at: string
           current_step: number
@@ -54,8 +55,12 @@ export type Database = {
           goal: string
           id: string
           last_activity_at: string
+          observation_summary: string | null
+          page_summary: string | null
           reasoning: string | null
+          recovery_status: string | null
           retry_count: number
+          screenshots: Json
           started_at: string
           status: string
           task_tree: Json
@@ -64,9 +69,11 @@ export type Database = {
           tool_history: Json
           updated_at: string
           user_id: string
+          waiting_status: string | null
         }
         Insert: {
           active_tab_id?: number | null
+          browser_memory?: Json
           completed_at?: string | null
           created_at?: string
           current_step?: number
@@ -74,8 +81,12 @@ export type Database = {
           goal: string
           id?: string
           last_activity_at?: string
+          observation_summary?: string | null
+          page_summary?: string | null
           reasoning?: string | null
+          recovery_status?: string | null
           retry_count?: number
+          screenshots?: Json
           started_at?: string
           status?: string
           task_tree?: Json
@@ -84,9 +95,11 @@ export type Database = {
           tool_history?: Json
           updated_at?: string
           user_id: string
+          waiting_status?: string | null
         }
         Update: {
           active_tab_id?: number | null
+          browser_memory?: Json
           completed_at?: string | null
           created_at?: string
           current_step?: number
@@ -94,8 +107,12 @@ export type Database = {
           goal?: string
           id?: string
           last_activity_at?: string
+          observation_summary?: string | null
+          page_summary?: string | null
           reasoning?: string | null
+          recovery_status?: string | null
           retry_count?: number
+          screenshots?: Json
           started_at?: string
           status?: string
           task_tree?: Json
@@ -104,6 +121,7 @@ export type Database = {
           tool_history?: Json
           updated_at?: string
           user_id?: string
+          waiting_status?: string | null
         }
         Relationships: [
           {

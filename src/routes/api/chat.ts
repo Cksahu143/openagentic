@@ -14,41 +14,74 @@ import { runJs } from "@/lib/code-runner.server";
 
 const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer-use assistant.
 
-You operate in a continuous OBSERVE → THINK → ACT → VERIFY loop:
-1. OBSERVE the current page/environment with a structured tool (companion_get_dom, companion_read_active_tab, companion_list_tabs). Never guess page contents.
-2. THINK briefly in prose about what to do next given the goal and observations.
-3. ACT with exactly one tool call.
-4. VERIFY the result by observing again before the next action.
-5. Repeat until the user's goal is complete. If something fails, explain why, adapt, and retry — ask the user only when truly ambiguous.
+You operate in a continuous OBSERVE → THINK → ACT → VERIFY loop with hybrid perception:
 
-Server tools: fetch_url, run_code, ask_ai.
-Client-applied tools: save_memory, create_task, write_file.
+OBSERVATION PRIORITY (always in this order):
+  1. companion_observe   — structured DOM + accessibility + page state (PRIMARY)
+  2. companion_read_active_tab / companion_list_tabs — text + tab context
+  3. companion_screenshot — VISION FALLBACK ONLY when structured data is
+     insufficient (canvas, webgl, pdf viewer, image-only UI, missing DOM).
+     Never poll screenshots on a loop.
 
-Companion browser tools (real control of the user's Chrome via the paired extension):
-- companion_list_tabs / companion_activate_tab / companion_open_tab / companion_close_tab / companion_release_tab
-- companion_navigate: change URL in a tab and wait for load
-- companion_get_dom: structured snapshot of interactive elements with stable "ref" ids — USE THIS to find what to click/fill instead of guessing selectors
-- companion_click: click by { ref } (preferred), { selector }, or { text }
-- companion_fill: type into an input by ref/selector/label; set submit:true to press Enter/submit
-- companion_select: choose a <select> option
-- companion_scroll: scroll (to:"top"|"bottom" or {dy})
-- companion_wait_for: wait for a selector or visible text (dynamic content)
-- companion_read_active_tab / companion_read_tab: plain-text page read
-- companion_search_web: shortcut that opens a search results page
+LOOP:
+  1. OBSERVE with companion_observe (or companion_read_active_tab). Never
+     guess page contents. The observation object gives you: url, title,
+     pageState (ready|loading|error|dialog-open), summary, headings,
+     landmarks, forms, tables, lists, dialogs, errors, loading indicators,
+     images with alt text, paragraphs, and interactive \`elements[]\` with
+     stable refs.
+  2. THINK: set_reasoning with 1-3 sentences of plan/rationale.
+  3. ACT with exactly one tool call, preferring a \`ref\` from the last
+     observation for click/fill/select.
+  4. VERIFY by observing again (or companion_wait_for) BEFORE the next act.
+     Never assume an action succeeded.
+  5. On failure: read the error → set_reasoning with a recovery plan →
+     record_recovery({ attempt, strategy }) → retry with an alternative
+     (different ref/selector, wait_for visible/enabled, scroll, re-navigate,
+     dismiss dialog, screenshot fallback). Ask the user only if recovery is
+     impossible.
 
-Session tools (ALWAYS use for multi-step goals so the user's Workspace stays live):
-- plan_session({ steps: [...] }) — call FIRST for any multi-step goal
-- set_reasoning({ reasoning }) — record short chain-of-thought before actions
-- update_step({ index, status }) — mark step running/done/failed/skipped
-- complete_session({ summary }) — mark the whole goal done
+INTELLIGENT WAITING — companion_wait_for modes:
+  - mode:"selector"  — CSS selector exists
+  - mode:"visible"   — selector exists AND is visible
+  - mode:"enabled"   — selector visible AND not disabled
+  - mode:"text"      — visible text appears
+  - mode:"ready"     — document.readyState === "complete"
+  - mode:"dialog"    — a modal dialog opens
+  - mode:"dom-stable"— DOM stops mutating (quietMs, default 500)
+Use these instead of fixed sleeps.
+
+BROWSER MEMORY — call set_browser_memory to remember, for the current session:
+  - visitedUrls, previousSearches, completedObjectives, currentObjective,
+    knownTabs, notes. Reference it before re-searching or re-navigating.
+
+SESSION TOOLS (ALWAYS for multi-step goals — the Workspace shows them live):
+  - plan_session({ steps })     — call FIRST
+  - set_reasoning({ reasoning })
+  - update_step({ index, status, note })
+  - record_recovery({ attempt, strategy, note })  — when retrying after failure
+  - set_browser_memory({ memory }) — merge session memory
+  - complete_session({ summary })
+
+SERVER TOOLS: fetch_url, run_code, ask_ai.
+CLIENT-APPLIED: save_memory, create_task, write_file.
+
+COMPANION BROWSER (real Chrome control):
+  companion_list_tabs, companion_activate_tab, companion_open_tab,
+  companion_close_tab, companion_release_tab, companion_navigate,
+  companion_observe, companion_click, companion_fill, companion_select,
+  companion_scroll, companion_wait_for, companion_read_active_tab,
+  companion_read_tab, companion_search_web, companion_screenshot.
 
 RULES:
-- For "open X and do Y": plan_session first, then navigate → get_dom → find search box → fill(value, submit:true) → wait_for results → get_dom → click best result. DO NOT open a pre-built ?search_query= URL and stop.
-- Always call get_dom before click/fill on a new page — never invent refs.
-- If an action fails: read the error, set_reasoning with a recovery plan, retry with an alternative (different ref/selector, wait_for, scroll, re-navigate). Ask the user only if recovery is impossible.
-- If a companion tool errors with "No companion device", tell the user to install & pair the extension (Devices page) and STOP.
+- For "open X and do Y": plan_session first, then navigate → observe → act →
+  wait_for → observe → verify. DO NOT open a pre-built ?q= URL and stop.
+- Always observe before click/fill on a new page — never invent refs.
+- Prefer structured observation over screenshots. Screenshot only when the
+  DOM cannot describe the UI.
+- If a companion tool errors with "No companion device", tell the user to
+  install & pair the extension (Devices page) and STOP.
 - Report progress in short markdown updates as you go.`;
-
 
 
 async function getUserIdFromRequest(request: Request): Promise<string | null> {
@@ -142,6 +175,34 @@ export const Route = createFileRoute("/api/chat")({
           await patchSession({ tool_history: hist.slice(-100) as never });
         }
 
+        async function appendScreenshot(entry: Record<string, unknown>) {
+          if (!sessionId) return;
+          const { data: row } = await supabaseAdmin
+            .from("agent_sessions").select("screenshots").eq("id", sessionId).maybeSingle();
+          const list = Array.isArray(row?.screenshots) ? (row!.screenshots as unknown[]) : [];
+          list.push({ t: Date.now(), ...entry });
+          await patchSession({ screenshots: list.slice(-30) as never });
+        }
+
+        async function mergeBrowserMemory(patch: Record<string, unknown>) {
+          if (!sessionId) return;
+          const { data: row } = await supabaseAdmin
+            .from("agent_sessions").select("browser_memory").eq("id", sessionId).maybeSingle();
+          const cur = (row?.browser_memory && typeof row.browser_memory === "object")
+            ? (row.browser_memory as Record<string, unknown>) : {};
+          // Arrays merge uniquely, scalars overwrite.
+          const merged: Record<string, unknown> = { ...cur };
+          for (const [k, v] of Object.entries(patch)) {
+            if (Array.isArray(v)) {
+              const prev = Array.isArray(cur[k]) ? cur[k] as unknown[] : [];
+              merged[k] = Array.from(new Set([...prev, ...v].map(String))).slice(-100);
+            } else {
+              merged[k] = v;
+            }
+          }
+          await patchSession({ browser_memory: merged as never });
+        }
+
         // Bootstrap session from latest user message.
         const uiMsgs = body.messages as UIMessage[];
         const lastUser = [...uiMsgs].reverse().find((m) => m.role === "user");
@@ -160,26 +221,37 @@ export const Route = createFileRoute("/api/chat")({
             inputSchema: schema,
             execute: async (args) => {
               if (!userId) return { ok: false, error: "Not authenticated. Sign in first." };
-              // Honor pause/cancel between actions.
               if (sessionId) {
                 const { data: s } = await supabaseAdmin
                   .from("agent_sessions").select("status").eq("id", sessionId).maybeSingle();
                 if (s?.status === "cancelled") return { ok: false, error: "Session cancelled by user." };
                 if (s?.status === "paused") return { ok: false, error: "Session paused. Resume from Workspace to continue." };
               }
+              // Waiting-status hint for the workspace panel.
+              if (action === "wait_for" || action === "navigate") {
+                await patchSession({ waiting_status: `${action} ${JSON.stringify(args).slice(0, 80)}` });
+              }
               await appendTimeline("🛠", action, args);
               const res = await callCompanion(userId, action, args as Record<string, unknown>);
               await appendTool(action, args, res);
               await appendTimeline(res.ok ? "✅" : "⚠️", `${action} ${res.ok ? "ok" : "failed"}`,
                 { error: res.error });
-              const r = res.result as { url?: string; tabId?: number } | undefined;
-              const patch: Record<string, unknown> = {};
+              const r = res.result as {
+                url?: string; tabId?: number; title?: string;
+                summary?: string; pageState?: string;
+              } | undefined;
+              const patch: Record<string, unknown> = { waiting_status: null };
               if (r?.url) patch.current_url = r.url;
               if (r?.tabId) patch.active_tab_id = r.tabId;
-              if (Object.keys(patch).length) await patchSession(patch);
-              if (!res.ok) {
-                await patchSession({ retry_count: undefined }); // no-op placeholder
+              if (action === "observe" || action === "get_dom") {
+                if (r?.summary) patch.observation_summary = r.summary;
+                if (r?.pageState) patch.page_summary = `${r.title ?? ""} — ${r.pageState}`;
+                // Auto-remember visited URLs.
+                if (r?.url) {
+                  await mergeBrowserMemory({ visitedUrls: [r.url] });
+                }
               }
+              await patchSession(patch);
               return res;
             },
           });
@@ -188,11 +260,11 @@ export const Route = createFileRoute("/api/chat")({
           model,
           system: SYSTEM_PROMPT,
           messages: await convertToModelMessages(body.messages as UIMessage[]),
-          stopWhen: stepCountIs(50),
+          stopWhen: stepCountIs(60),
           tools: {
             plan_session: tool({
               description:
-                "FIRST STEP for any multi-step browser goal. Create a live task tree of ordered steps the agent will execute. Steps appear in the user's Workspace immediately.",
+                "FIRST STEP for any multi-step browser goal. Create a live task tree of ordered steps. Steps appear in the user's Workspace immediately.",
               inputSchema: z.object({
                 steps: z.array(z.string().min(2).max(160)).min(1).max(20),
               }),
@@ -205,7 +277,7 @@ export const Route = createFileRoute("/api/chat")({
             }),
             update_step: tool({
               description:
-                "Mark a task-tree step as running / done / failed. Call this as you progress so the user's Workspace shows live progress.",
+                "Mark a task-tree step as running / done / failed / skipped. Call as you progress.",
               inputSchema: z.object({
                 index: z.number().int().min(0),
                 status: z.enum(["running", "done", "failed", "skipped"]),
@@ -228,11 +300,51 @@ export const Route = createFileRoute("/api/chat")({
             }),
             set_reasoning: tool({
               description:
-                "Record your current chain-of-thought / reasoning so the user can see WHY the agent is doing what it's doing. Keep it short — 1-3 sentences.",
+                "Record current chain-of-thought so the user sees WHY. Keep it short — 1-3 sentences.",
               inputSchema: z.object({ reasoning: z.string().min(1).max(600) }),
               execute: async ({ reasoning }) => {
                 await patchSession({ reasoning });
                 await appendTimeline("💭", "Thinking", { reasoning });
+                return { ok: true };
+              },
+            }),
+            record_recovery: tool({
+              description:
+                "Record a recovery attempt after an action failed. Increments retry_count and updates recovery_status shown in the Workspace.",
+              inputSchema: z.object({
+                strategy: z.string().min(2).max(300),
+                attempt: z.number().int().min(1).max(10).optional(),
+                note: z.string().max(400).optional(),
+              }),
+              execute: async ({ strategy, attempt, note }) => {
+                if (!sessionId) return { ok: false };
+                const { data: row } = await supabaseAdmin
+                  .from("agent_sessions").select("retry_count").eq("id", sessionId).maybeSingle();
+                const next = (row?.retry_count ?? 0) + 1;
+                await patchSession({
+                  retry_count: attempt ?? next,
+                  recovery_status: strategy.slice(0, 300),
+                });
+                await appendTimeline("🔁", `Recovery: ${strategy}`, { note, attempt: attempt ?? next });
+                return { ok: true, attempt: attempt ?? next };
+              },
+            }),
+            set_browser_memory: tool({
+              description:
+                "Merge fields into the current session's browser memory (visitedUrls, previousSearches, completedObjectives, currentObjective, knownTabs, notes). Arrays are unioned; scalars overwrite.",
+              inputSchema: z.object({
+                memory: z.object({
+                  currentObjective: z.string().max(300).optional(),
+                  completedObjectives: z.array(z.string().max(300)).optional(),
+                  visitedUrls: z.array(z.string().max(400)).optional(),
+                  previousSearches: z.array(z.string().max(200)).optional(),
+                  knownTabs: z.array(z.string().max(200)).optional(),
+                  notes: z.string().max(1000).optional(),
+                }),
+              }),
+              execute: async ({ memory }) => {
+                await mergeBrowserMemory(memory as Record<string, unknown>);
+                await appendTimeline("🧾", "Browser memory updated", memory);
                 return { ok: true };
               },
             }),
@@ -244,6 +356,7 @@ export const Route = createFileRoute("/api/chat")({
                   status: "completed",
                   completed_at: new Date().toISOString(),
                   reasoning: summary,
+                  waiting_status: null,
                 });
                 await appendTimeline("🎉", "Goal completed", { summary });
                 return { ok: true };
@@ -281,16 +394,10 @@ export const Route = createFileRoute("/api/chat")({
                 try {
                   const r = await fetchUrl(url);
                   return {
-                    ok: r.ok,
-                    status: r.status,
-                    finalUrl: r.finalUrl,
-                    title: r.title,
-                    contentType: r.contentType,
-                    text: r.text,
+                    ok: r.ok, status: r.status, finalUrl: r.finalUrl,
+                    title: r.title, contentType: r.contentType, text: r.text,
                     links: r.links.slice(0, 20),
-                    bytes: r.bytes,
-                    truncated: r.truncated,
-                    elapsedMs: r.elapsedMs,
+                    bytes: r.bytes, truncated: r.truncated, elapsedMs: r.elapsedMs,
                   };
                 } catch (e) {
                   return { ok: false, error: e instanceof Error ? e.message : String(e) };
@@ -364,12 +471,12 @@ export const Route = createFileRoute("/api/chat")({
             ),
             companion_navigate: companionTool(
               "navigate",
-              "Navigate a tab (default: active tab) to a URL and wait for load.",
+              "Navigate a tab (default: active tab) to a URL and wait for load complete.",
               z.object({ url: z.string().url(), tabId: z.number().optional() }),
             ),
-            companion_get_dom: companionTool(
-              "get_dom",
-              "Structured snapshot of interactive elements on the active tab. Returns url/title/readyState/scroll and an `elements` array with stable {ref, tag, role, label, name, type, href, x, y, w, h}. Use these refs with companion_click/fill.",
+            companion_observe: companionTool(
+              "observe",
+              "PRIMARY perception tool. Returns a UNIFIED observation of the active tab: url, title, pageState (ready|loading|error|dialog-open), summary, headings, landmarks (nav/main/aside/…), forms with fields, tables, lists, dialogs, errors (aria-live/role=alert), loading indicators, images with alt text, paragraphs, and an interactive `elements[]` array with stable {ref, tag, role, label, type, disabled, href, x, y, w, h}. Prefer this over reading raw HTML. Use returned refs with companion_click/fill/select.",
               z.object({
                 tabId: z.number().optional(),
                 max: z.number().min(1).max(300).optional(),
@@ -378,7 +485,7 @@ export const Route = createFileRoute("/api/chat")({
             ),
             companion_click: companionTool(
               "click",
-              "Click an element on the active tab. Prefer `ref` from get_dom; falls back to `selector` or fuzzy `text`.",
+              "Click an element. Prefer `ref` from observe; falls back to `selector` or fuzzy `text`.",
               z.object({
                 tabId: z.number().optional(),
                 ref: z.string().optional(),
@@ -388,7 +495,7 @@ export const Route = createFileRoute("/api/chat")({
             ),
             companion_fill: companionTool(
               "fill",
-              "Fill an input/textarea. Prefer `ref` from get_dom. Set submit:true to press Enter / submit the form after filling.",
+              "Fill an input/textarea. Prefer `ref` from observe. Set submit:true to press Enter after filling.",
               z.object({
                 tabId: z.number().optional(),
                 ref: z.string().optional(),
@@ -419,14 +526,77 @@ export const Route = createFileRoute("/api/chat")({
             ),
             companion_wait_for: companionTool(
               "wait_for",
-              "Wait until a CSS selector matches OR visible text appears (dynamic content). Default 8s.",
+              "Intelligent wait. mode: 'selector' | 'visible' | 'enabled' | 'text' | 'ready' | 'dialog' | 'dom-stable'. Provide selector/text as needed. Default timeout 8s.",
               z.object({
                 tabId: z.number().optional(),
+                mode: z.enum(["selector","visible","enabled","text","ready","dialog","dom-stable"]).optional(),
                 selector: z.string().optional(),
                 text: z.string().optional(),
                 timeoutMs: z.number().optional(),
+                quietMs: z.number().optional(),
               }),
             ),
+            companion_screenshot: tool({
+              description:
+                "VISION FALLBACK. Capture a JPEG screenshot of the active tab and (optionally) analyze it with a multimodal model. Only call this when structured observation is insufficient — canvas/webgl/pdf viewer, image-only UIs, or when observe cannot describe what the user is asking about. Result stored in the session's screenshot history for replay.",
+              inputSchema: z.object({
+                tabId: z.number().optional(),
+                reason: z.string().min(2).max(300),
+                analyze: z.string().max(500).optional().describe(
+                  "Optional question to ask a vision model about the screenshot. Leave empty to only capture."),
+                quality: z.number().min(20).max(90).optional(),
+              }),
+              execute: async ({ tabId, reason, analyze, quality }) => {
+                if (!userId) return { ok: false, error: "Not authenticated." };
+                if (sessionId) {
+                  const { data: s } = await supabaseAdmin
+                    .from("agent_sessions").select("status").eq("id", sessionId).maybeSingle();
+                  if (s?.status === "cancelled") return { ok: false, error: "Session cancelled." };
+                  if (s?.status === "paused") return { ok: false, error: "Session paused." };
+                }
+                await appendTimeline("📷", "screenshot", { reason });
+                const cap = await callCompanion(userId, "screenshot",
+                  { tabId, quality: quality ?? 55 }, { timeoutMs: 20_000 });
+                if (!cap.ok) {
+                  await appendTimeline("⚠️", "screenshot failed", { error: cap.error });
+                  return { ok: false, error: cap.error };
+                }
+                const r = cap.result as { dataUrl: string; url?: string; title?: string; tabId?: number };
+                let visualSummary: string | undefined;
+                if (analyze) {
+                  try {
+                    const visionModel = gateway("google/gemini-3-flash-preview");
+                    const messages = [{
+                      role: "user" as const,
+                      content: [
+                        { type: "text" as const, text: analyze },
+                        { type: "image" as const, image: r.dataUrl },
+                      ],
+                    }];
+                    const v = await streamText({ model: visionModel, messages });
+                    visualSummary = "";
+                    for await (const c of v.textStream) visualSummary += c;
+                  } catch (e) {
+                    visualSummary = `vision error: ${e instanceof Error ? e.message : String(e)}`;
+                  }
+                }
+                await appendScreenshot({
+                  step: sessionId ? undefined : null,
+                  reason,
+                  url: r.url,
+                  title: r.title,
+                  tabId: r.tabId,
+                  // Do not persist full dataUrl in JSONB — keep session lean.
+                  // Show a placeholder marker; UI reads visualSummary + metadata.
+                  hasImage: true,
+                  visualSummary,
+                });
+                return {
+                  ok: true, tabId: r.tabId, url: r.url, title: r.title,
+                  visualSummary, capturedAt: Date.now(),
+                };
+              },
+            }),
             companion_release_tab: companionTool(
               "release_tab",
               "Signal the agent is done controlling a tab — removes the glowing overlay.",

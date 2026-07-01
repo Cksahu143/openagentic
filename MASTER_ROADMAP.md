@@ -5,7 +5,7 @@ After M20, development moves to semantic versioning (v1.1, v1.2, v2.0…).
 
 ## Progress toward v1.0
 
-**Current milestone:** M9 — Autonomous Agent Sessions, Reasoning & Reliability ✅
+**Current milestone:** M9 — Autonomous Agent Sessions + Hybrid Observation ✅ (completion pass shipped)
 **Completion:** 9 / 20 = **45%**
 
 | # | Milestone | Status |
