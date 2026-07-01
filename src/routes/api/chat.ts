@@ -16,20 +16,39 @@ const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer assista
 
 You can do real work today using these tools:
 
-- save_memory: remember a workflow, preference, frequent site, note or fact.
-- create_task: track a multi-step goal for the user.
-- fetch_url: fetch any public http(s) URL and return its title, readable text, status and outgoing links. Use this for research, link/health checks, reading docs, scraping a public page, calling JSON APIs.
-- run_code: run a small JavaScript snippet on the server (5s timeout, captured console). Use for quick math, parsing, transformations. Top-level await is allowed. Return the value as the last expression.
-- ask_ai: send a sub-prompt to another model on YOUR Lovable AI account (the user does not need their own API key). Use to delegate a sub-task to a cheaper / faster model, or to get a second opinion.
-- write_file: write a document (markdown, code, json, txt) to the user's private file storage. Use when the user asks you to produce a doc, report, summary, snippet, dataset.
-- read_file / list_files: read files the user previously wrote or uploaded.
+Memory / tasks / files (client-applied):
+- save_memory, create_task, write_file
+
+Server-side research & compute:
+- fetch_url: fetch any http(s) URL (title, text, links, status). 15s / 1.5MB caps.
+- run_code: run JS on the server (5s timeout, top-level await, console captured).
+- ask_ai: delegate a sub-prompt to another Lovable AI Gateway model.
+
+Companion (talks to the user's paired browser extension — REAL browser control on their device):
+- companion_list_tabs: list every tab in every window the user has open.
+- companion_open_tab: open a URL in a new tab.
+- companion_close_tab: close a tab by id.
+- companion_activate_tab: focus a tab by id (bring window forward + activate).
+- companion_search_web: run a Google/DuckDuckGo/Bing search — opens a new tab with the result page.
+- companion_read_active_tab: read title, URL, and visible text of the currently active tab.
+- companion_read_tab: same, for a specific tabId.
 
 Rules:
-1. Pick tools deliberately — call fetch_url when you need fresh info, run_code when computing, write_file when the user asks for a deliverable.
-2. After tool calls, summarise the result in plain language.
-3. Never invent URLs, file contents, or run_code output — call the tool.
-4. When asked to test a website, fetch_url it and report status, title, broken links if any, headings.
-5. Use markdown. Be concise but show your work.`;
+1. Companion tools require the user to have installed the OpenAgent Companion Chrome extension and paired it (Devices page). If a companion tool errors with "No companion device", tell the user how to install it and STOP — do not retry.
+2. Before using companion_open_tab or companion_search_web for the first time in a session, ask the user for confirmation if the request is ambiguous. Otherwise proceed.
+3. Report what you did, in plain markdown. Show tab titles/URLs when relevant.
+4. Never fabricate tab contents — always call the tool.
+5. Use fetch_url for public pages, use companion tools when the user asks about "my tabs", "open X", "search for X in my browser".`;
+
+async function getUserIdFromRequest(request: Request): Promise<string | null> {
+  const auth = request.headers.get("authorization") || request.headers.get("Authorization");
+  if (!auth?.startsWith("Bearer ")) return null;
+  const token = auth.slice(7);
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data.user) return null;
+  return data.user.id;
+}
 
 export const Route = createFileRoute("/api/chat")({
   server: {
@@ -41,12 +60,26 @@ export const Route = createFileRoute("/api/chat")({
         }
 
         const key = process.env.LOVABLE_API_KEY;
-        if (!key) {
-          return new Response("Missing LOVABLE_API_KEY", { status: 500 });
-        }
+        if (!key) return new Response("Missing LOVABLE_API_KEY", { status: 500 });
 
+        const userId = await getUserIdFromRequest(request);
         const gateway = createLovableAiGatewayProvider(key);
         const model = gateway("google/gemini-3-flash-preview");
+
+        // Lazy-import companion helper (server-only)
+        const { callCompanion } = await import("@/lib/companion.server");
+
+        const companionTool = (action: string, description: string, schema: z.ZodTypeAny) =>
+          tool({
+            description,
+            inputSchema: schema,
+            execute: async (args) => {
+              if (!userId) {
+                return { ok: false, error: "Not authenticated. Sign in first." };
+              }
+              return callCompanion(userId, action, args as Record<string, unknown>);
+            },
+          });
 
         const result = streamText({
           model,
@@ -54,10 +87,9 @@ export const Route = createFileRoute("/api/chat")({
           messages: await convertToModelMessages(body.messages as UIMessage[]),
           stopWhen: stepCountIs(50),
           tools: {
-            // --- client-applied tools (planner loop persists them) ---
             save_memory: tool({
               description:
-                "Save something the user wants the agent to remember (workflow, preference, site, note, fact). Persisted to the user's memory store.",
+                "Save something the user wants the agent to remember (workflow, preference, site, note, fact).",
               inputSchema: z.object({
                 kind: z.enum(["workflow", "preference", "site", "note", "fact"]),
                 label: z.string().min(1).max(120),
@@ -65,15 +97,12 @@ export const Route = createFileRoute("/api/chat")({
               }),
             }),
             create_task: tool({
-              description:
-                "Create a persistent task record for a multi-step user goal.",
-              inputSchema: z.object({
-                goal: z.string().min(3).max(280),
-              }),
+              description: "Create a persistent task record for a multi-step user goal.",
+              inputSchema: z.object({ goal: z.string().min(3).max(280) }),
             }),
             write_file: tool({
               description:
-                "Write a document/file to the user's private storage (markdown, txt, json, code). Path is relative to the user's folder, e.g. 'reports/research.md'. Overwrites if it exists.",
+                "Write a document to the user's private storage. Path is relative to their folder.",
               inputSchema: z.object({
                 path: z.string().min(1).max(200),
                 content: z.string().max(200_000),
@@ -81,13 +110,10 @@ export const Route = createFileRoute("/api/chat")({
               }),
             }),
 
-            // --- server-executed tools ---
             fetch_url: tool({
               description:
-                "Fetch a public http(s) URL. Returns status, final URL after redirects, title, readable text, content-type and up to 40 outgoing links. Use for research, link/health checks, scraping public pages, reading APIs. 15s timeout, 1.5MB cap.",
-              inputSchema: z.object({
-                url: z.string().url(),
-              }),
+                "Fetch a public http(s) URL. Returns status, final URL, title, readable text, links.",
+              inputSchema: z.object({ url: z.string().url() }),
               execute: async ({ url }) => {
                 try {
                   const r = await fetchUrl(url);
@@ -104,57 +130,75 @@ export const Route = createFileRoute("/api/chat")({
                     elapsedMs: r.elapsedMs,
                   };
                 } catch (e) {
-                  return {
-                    ok: false,
-                    error: e instanceof Error ? e.message : String(e),
-                  };
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
                 }
               },
             }),
             run_code: tool({
-              description:
-                "Run a short JavaScript snippet on the server. 5 second timeout. Top-level await allowed. Use 'return <value>' to return; console.log is captured.",
-              inputSchema: z.object({
-                code: z.string().min(1).max(20_000),
-              }),
-              execute: async ({ code }) => {
-                const r = await runJs(code);
-                return r;
-              },
+              description: "Run a short JS snippet on the server. 5s timeout.",
+              inputSchema: z.object({ code: z.string().min(1).max(20_000) }),
+              execute: async ({ code }) => runJs(code),
             }),
             ask_ai: tool({
               description:
-                "Delegate a sub-prompt to another model on the agent's Lovable AI account (the user doesn't need their own API key). Returns the model's text. Use for cheap one-shot questions, second opinions, or specialised models.",
+                "Delegate a sub-prompt to another Lovable AI Gateway model. Zero-config for the user.",
               inputSchema: z.object({
                 prompt: z.string().min(1).max(8000),
                 system: z.string().max(2000).optional(),
-                model: z
-                  .string()
-                  .max(120)
-                  .optional()
-                  .describe(
-                    "Optional model id. Defaults to google/gemini-3-flash-preview. Use google/gemini-3-pro-preview for harder tasks.",
-                  ),
+                model: z.string().max(120).optional(),
               }),
               execute: async ({ prompt, system, model: modelId }) => {
                 try {
                   const subModel = gateway(modelId || "google/gemini-3-flash-preview");
-                  const sub = await streamText({
-                    model: subModel,
-                    system,
-                    prompt,
-                  });
+                  const sub = await streamText({ model: subModel, system, prompt });
                   let text = "";
                   for await (const chunk of sub.textStream) text += chunk;
                   return { ok: true, text };
                 } catch (e) {
-                  return {
-                    ok: false,
-                    error: e instanceof Error ? e.message : String(e),
-                  };
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
                 }
               },
             }),
+
+            // --- Companion (browser extension) ---
+            companion_list_tabs: companionTool(
+              "list_tabs",
+              "List all open browser tabs across all windows on the user's device.",
+              z.object({}),
+            ),
+            companion_open_tab: companionTool(
+              "open_tab",
+              "Open a URL in a new tab on the user's browser.",
+              z.object({ url: z.string().url(), active: z.boolean().optional() }),
+            ),
+            companion_close_tab: companionTool(
+              "close_tab",
+              "Close a browser tab by id.",
+              z.object({ tabId: z.number() }),
+            ),
+            companion_activate_tab: companionTool(
+              "activate_tab",
+              "Bring a tab (and its window) to the foreground.",
+              z.object({ tabId: z.number() }),
+            ),
+            companion_search_web: companionTool(
+              "search_web",
+              "Run a web search on the user's browser (opens a new tab with results).",
+              z.object({
+                query: z.string().min(1).max(400),
+                engine: z.enum(["google", "duckduckgo", "bing"]).optional(),
+              }),
+            ),
+            companion_read_active_tab: companionTool(
+              "read_active_tab",
+              "Read title, URL, and visible text of the user's currently active tab.",
+              z.object({}),
+            ),
+            companion_read_tab: companionTool(
+              "read_tab",
+              "Read a specific tab's title, URL, and text by tabId.",
+              z.object({ tabId: z.number() }),
+            ),
           },
         });
 
