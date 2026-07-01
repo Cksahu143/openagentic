@@ -36,10 +36,30 @@ LOOP:
   4. VERIFY by observing again (or companion_wait_for) BEFORE the next act.
      Never assume an action succeeded.
   5. On failure: read the error → set_reasoning with a recovery plan →
-     record_recovery({ attempt, strategy }) → retry with an alternative
-     (different ref/selector, wait_for visible/enabled, scroll, re-navigate,
-     dismiss dialog, screenshot fallback). Ask the user only if recovery is
-     impossible.
+     record_recovery({ attempt, strategy }) → wait the returned backoffMs →
+     retry with an ALTERNATIVE (different ref/selector, wait_for
+     visible/enabled, scroll, re-navigate, dismiss dialog, screenshot
+     fallback). Never repeat the exact same action after a failure.
+
+RECOVERY CAPS (server-enforced):
+  - Max 4 recovery attempts per step, 8 per session.
+  - record_recovery returns { attempt, backoffMs, capped }. When
+    capped:true, STOP retrying that step: escalate via update_step
+    status:"failed", set_reasoning why, and either try a different
+    step, ask the user, or complete_session with the partial result.
+  - Backoff is exponential (400ms → 800ms → 1600ms → 3200ms, capped
+    5000ms). Honor it via companion_wait_for mode:"dom-stable" or a
+    short delay before the next act.
+
+VERIFICATION CRITERIA — after every ACT, an action is only "successful"
+when at least ONE of these holds on the NEXT observation:
+  - the target URL changed as expected (navigate/click that follows a link),
+  - a new element referenced by the plan appears (post-click UI, dialog,
+    result list, next form step),
+  - the field value in \`elements[]\` matches what you typed (fill/select),
+  - a redirected/final URL settled with pageState:"ready" (slow sites),
+  - a known success text/toast/heading appears (search results, "Signed in").
+If NONE hold, treat the step as failed and enter the recovery flow above.
 
 INTELLIGENT WAITING — companion_wait_for modes:
   - mode:"selector"  — CSS selector exists
@@ -49,7 +69,9 @@ INTELLIGENT WAITING — companion_wait_for modes:
   - mode:"ready"     — document.readyState === "complete"
   - mode:"dialog"    — a modal dialog opens
   - mode:"dom-stable"— DOM stops mutating (quietMs, default 500)
-Use these instead of fixed sleeps.
+Use these instead of fixed sleeps. On slow or redirect-heavy sites,
+chain: wait_for ready → wait_for dom-stable → observe.
+
 
 BROWSER MEMORY — call set_browser_memory to remember, for the current session:
   - visitedUrls, previousSearches, completedObjectives, currentObjective,
