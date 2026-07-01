@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>OpenAgent Companion</title>
+    <style>
+      body { font-family: system-ui, sans-serif; width: 320px; padding: 14px; background: #0a0a0f; color: #e4e4e7; margin: 0; }
+      h1 { font-size: 14px; margin: 0 0 8px; letter-spacing: 0.02em; }
+      .muted { color: #a1a1aa; font-size: 12px; line-height: 1.5; }
+      textarea { width: 100%; min-height: 90px; box-sizing: border-box; background: #13131a; color: inherit; border: 1px solid #27272a; border-radius: 6px; padding: 8px; font: 11px ui-monospace, monospace; resize: vertical; }
+      button { background: #6366f1; color: white; border: 0; border-radius: 6px; padding: 8px 12px; font-weight: 600; cursor: pointer; }
+      button.secondary { background: transparent; border: 1px solid #27272a; color: #a1a1aa; }
+      .row { display: flex; gap: 8px; margin-top: 8px; }
+      .ok { color: #34d399; }
+      .err { color: #f87171; }
+      code { background: #13131a; padding: 2px 4px; border-radius: 3px; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <h1>🤖 OpenAgent Companion</h1>
+    <div id="unpaired">
+      <p class="muted">Paste your device code from <b>OpenAgent → Devices</b> to link this browser.</p>
+      <textarea id="code" placeholder="Paste device code here…"></textarea>
+      <div class="row">
+        <button id="pair">Link browser</button>
+      </div>
+      <p id="msg" class="muted"></p>
+    </div>
+    <div id="paired" style="display:none">
+      <p class="ok">✓ Linked to OpenAgent</p>
+      <p class="muted">Device: <code id="dev"></code></p>
+      <p class="muted">The agent can now open tabs, search, and read tabs — always logged.</p>
+      <div class="row">
+        <button id="unpair" class="secondary">Unlink</button>
+      </div>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
