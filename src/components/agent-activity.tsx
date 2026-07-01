@@ -110,7 +110,7 @@ export function AgentActivity({ className }: { className?: string }) {
                 message: `${c.action} · ${c.status}${c.error ? " · " + c.error : ""}`,
                 metadata: { args: c.args, result: c.result },
                 created_at: c.updated_at || c.created_at,
-                kind: "command",
+                kind: "command" as const,
               },
               ...others,
             ].slice(0, MAX_ROWS);
