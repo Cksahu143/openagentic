@@ -44,6 +44,77 @@ export type Database = {
         }
         Relationships: []
       }
+      agent_sessions: {
+        Row: {
+          active_tab_id: number | null
+          completed_at: string | null
+          created_at: string
+          current_step: number
+          current_url: string | null
+          goal: string
+          id: string
+          last_activity_at: string
+          reasoning: string | null
+          retry_count: number
+          started_at: string
+          status: string
+          task_tree: Json
+          thread_id: string | null
+          timeline: Json
+          tool_history: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          active_tab_id?: number | null
+          completed_at?: string | null
+          created_at?: string
+          current_step?: number
+          current_url?: string | null
+          goal: string
+          id?: string
+          last_activity_at?: string
+          reasoning?: string | null
+          retry_count?: number
+          started_at?: string
+          status?: string
+          task_tree?: Json
+          thread_id?: string | null
+          timeline?: Json
+          tool_history?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          active_tab_id?: number | null
+          completed_at?: string | null
+          created_at?: string
+          current_step?: number
+          current_url?: string | null
+          goal?: string
+          id?: string
+          last_activity_at?: string
+          reasoning?: string | null
+          retry_count?: number
+          started_at?: string
+          status?: string
+          task_tree?: Json
+          thread_id?: string | null
+          timeline?: Json
+          tool_history?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_sessions_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       companion_commands: {
         Row: {
           action: string
