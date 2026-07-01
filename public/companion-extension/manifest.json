@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "OpenAgent Companion",
+  "version": "0.1.0",
+  "description": "Lets the OpenAgent web assistant open tabs, search, and read your current tabs — with your explicit permission.",
+  "permissions": ["tabs", "storage", "alarms", "scripting", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "OpenAgent Companion" },
+  "icons": { "48": "icon.png", "128": "icon.png" }
+}
