@@ -13,6 +13,7 @@ import {
   Folder,
   Video,
   Blocks,
+  MonitorPlay,
 } from "lucide-react";
 
 import {
@@ -30,6 +31,7 @@ import {
 
 const mainItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Workspace", url: "/workspace", icon: MonitorPlay },
   { title: "Chat", url: "/chat", icon: MessagesSquare },
   { title: "Tasks", url: "/tasks", icon: ListChecks },
   { title: "Memory", url: "/memory", icon: Brain },
@@ -62,7 +64,7 @@ export function AppSidebar() {
           <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="font-mono text-sm font-semibold tracking-tight">OpenAgent</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              Milestone 7
+              Milestone 8
             </span>
           </div>
         </div>

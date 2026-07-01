@@ -22,7 +22,7 @@ export async function callCompanion(
   args: Record<string, unknown> = {},
   opts: { timeoutMs?: number } = {},
 ): Promise<CompanionResult> {
-  const timeoutMs = opts.timeoutMs ?? 20_000;
+  const timeoutMs = opts.timeoutMs ?? 45_000;
 
   // Pick the most recently seen device for this user
   const { data: devices, error: devErr } = await supabaseAdmin
@@ -60,7 +60,7 @@ export async function callCompanion(
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 300));
     const { data: row } = await supabaseAdmin
       .from("companion_commands")
       .select("status, result, error")

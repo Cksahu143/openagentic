@@ -12,33 +12,37 @@ import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
 import { fetchUrl } from "@/lib/browser-fetch.server";
 import { runJs } from "@/lib/code-runner.server";
 
-const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer assistant.
+const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer-use assistant.
 
-You can do real work today using these tools:
+You operate in a continuous OBSERVE → THINK → ACT → VERIFY loop:
+1. OBSERVE the current page/environment with a structured tool (companion_get_dom, companion_read_active_tab, companion_list_tabs). Never guess page contents.
+2. THINK briefly in prose about what to do next given the goal and observations.
+3. ACT with exactly one tool call.
+4. VERIFY the result by observing again before the next action.
+5. Repeat until the user's goal is complete. If something fails, explain why, adapt, and retry — ask the user only when truly ambiguous.
 
-Memory / tasks / files (client-applied):
-- save_memory, create_task, write_file
+Server tools: fetch_url, run_code, ask_ai.
+Client-applied tools: save_memory, create_task, write_file.
 
-Server-side research & compute:
-- fetch_url: fetch any http(s) URL (title, text, links, status). 15s / 1.5MB caps.
-- run_code: run JS on the server (5s timeout, top-level await, console captured).
-- ask_ai: delegate a sub-prompt to another Lovable AI Gateway model.
+Companion browser tools (real control of the user's Chrome via the paired extension):
+- companion_list_tabs / companion_activate_tab / companion_open_tab / companion_close_tab / companion_release_tab
+- companion_navigate: change URL in a tab and wait for load
+- companion_get_dom: structured snapshot of interactive elements with stable "ref" ids — USE THIS to find what to click/fill instead of guessing selectors
+- companion_click: click by { ref } (preferred), { selector }, or { text }
+- companion_fill: type into an input by ref/selector/label; set submit:true to press Enter/submit
+- companion_select: choose a <select> option
+- companion_scroll: scroll (to:"top"|"bottom" or {dy})
+- companion_wait_for: wait for a selector or visible text (dynamic content)
+- companion_read_active_tab / companion_read_tab: plain-text page read
+- companion_search_web: shortcut that opens a search results page
 
-Companion (talks to the user's paired browser extension — REAL browser control on their device):
-- companion_list_tabs: list every tab in every window the user has open.
-- companion_open_tab: open a URL in a new tab.
-- companion_close_tab: close a tab by id.
-- companion_activate_tab: focus a tab by id (bring window forward + activate).
-- companion_search_web: run a Google/DuckDuckGo/Bing search — opens a new tab with the result page.
-- companion_read_active_tab: read title, URL, and visible text of the currently active tab.
-- companion_read_tab: same, for a specific tabId.
+RULES:
+- For "open X and do Y" (e.g. "Open YouTube and search for Python tutorial"): navigate → get_dom → find search box → fill(value, submit:true) → wait_for results → get_dom → click best result. DO NOT just open a pre-built ?search_query= URL and stop.
+- Always call get_dom before click/fill on a new page — never invent refs.
+- If a companion tool errors with "No companion device", tell the user to install & pair the extension (Devices page) and STOP.
+- Report progress in short markdown updates as you go.`;
 
-Rules:
-1. Companion tools require the user to have installed the OpenAgent Companion Chrome extension and paired it (Devices page). If a companion tool errors with "No companion device", tell the user how to install it and STOP — do not retry.
-2. Before using companion_open_tab or companion_search_web for the first time in a session, ask the user for confirmation if the request is ambiguous. Otherwise proceed.
-3. Report what you did, in plain markdown. Show tab titles/URLs when relevant.
-4. Never fabricate tab contents — always call the tool.
-5. Use fetch_url for public pages, use companion tools when the user asks about "my tabs", "open X", "search for X in my browser".`;
+
 
 async function getUserIdFromRequest(request: Request): Promise<string | null> {
   const auth = request.headers.get("authorization") || request.headers.get("Authorization");
@@ -198,6 +202,76 @@ export const Route = createFileRoute("/api/chat")({
               "read_tab",
               "Read a specific tab's title, URL, and text by tabId.",
               z.object({ tabId: z.number() }),
+            ),
+            companion_navigate: companionTool(
+              "navigate",
+              "Navigate a tab (default: active tab) to a URL and wait for load.",
+              z.object({ url: z.string().url(), tabId: z.number().optional() }),
+            ),
+            companion_get_dom: companionTool(
+              "get_dom",
+              "Structured snapshot of interactive elements on the active tab. Returns url/title/readyState/scroll and an `elements` array with stable {ref, tag, role, label, name, type, href, x, y, w, h}. Use these refs with companion_click/fill.",
+              z.object({
+                tabId: z.number().optional(),
+                max: z.number().min(1).max(300).optional(),
+                includeText: z.boolean().optional(),
+              }),
+            ),
+            companion_click: companionTool(
+              "click",
+              "Click an element on the active tab. Prefer `ref` from get_dom; falls back to `selector` or fuzzy `text`.",
+              z.object({
+                tabId: z.number().optional(),
+                ref: z.string().optional(),
+                selector: z.string().optional(),
+                text: z.string().optional(),
+              }),
+            ),
+            companion_fill: companionTool(
+              "fill",
+              "Fill an input/textarea. Prefer `ref` from get_dom. Set submit:true to press Enter / submit the form after filling.",
+              z.object({
+                tabId: z.number().optional(),
+                ref: z.string().optional(),
+                selector: z.string().optional(),
+                label: z.string().optional(),
+                value: z.string(),
+                submit: z.boolean().optional(),
+              }),
+            ),
+            companion_select: companionTool(
+              "select",
+              "Choose an option in a <select> element.",
+              z.object({
+                tabId: z.number().optional(),
+                ref: z.string().optional(),
+                selector: z.string().optional(),
+                value: z.string(),
+              }),
+            ),
+            companion_scroll: companionTool(
+              "scroll",
+              "Scroll the active tab. Use to:'top'|'bottom' or dy:pixels.",
+              z.object({
+                tabId: z.number().optional(),
+                to: z.enum(["top", "bottom"]).optional(),
+                dy: z.number().optional(),
+              }),
+            ),
+            companion_wait_for: companionTool(
+              "wait_for",
+              "Wait until a CSS selector matches OR visible text appears (dynamic content). Default 8s.",
+              z.object({
+                tabId: z.number().optional(),
+                selector: z.string().optional(),
+                text: z.string().optional(),
+                timeoutMs: z.number().optional(),
+              }),
+            ),
+            companion_release_tab: companionTool(
+              "release_tab",
+              "Signal the agent is done controlling a tab — removes the glowing overlay.",
+              z.object({ tabId: z.number().optional() }),
             ),
           },
         });
