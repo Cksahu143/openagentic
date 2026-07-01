@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "OpenAgent Companion",
-  "version": "0.2.0",
-  "description": "Lets the OpenAgent web assistant open tabs, search, and read your current tabs — with your explicit permission.",
+  "version": "0.3.0",
+  "description": "Lets the OpenAgent web assistant open tabs, search, control forms, observe rich page structure, and take fallback screenshots — with your explicit permission.",
   "permissions": ["tabs", "storage", "alarms", "scripting", "activeTab"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },

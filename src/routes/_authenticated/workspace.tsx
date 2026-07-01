@@ -1,14 +1,10 @@
 /**
- * AI Workspace — Milestone 9.
+ * AI Workspace — Milestone 9 completion pass.
  *
- * Live control center for persistent agent sessions:
- * - Session list (all recent sessions, filterable)
- * - Live task tree for the active session
- * - Streaming timeline of reasoning + actions
- * - Current reasoning + current URL + active tab
- * - Session controls: Pause / Resume / Cancel
- * - Tool history
- * Everything updates in realtime via postgres_changes.
+ * Live control center for persistent agent sessions with the full hybrid
+ * observation state: task tree, reasoning, browser state, page summary,
+ * retry/recovery, waiting status, browser memory, screenshot log, timeline.
+ * Everything updates in realtime via postgres_changes on `agent_sessions`.
  */
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -16,13 +12,18 @@ import { useServerFn } from "@tanstack/react-start";
 import {
   Activity,
   Brain,
+  Camera,
   CheckCircle2,
   Circle,
   CircleDashed,
+  Eye,
+  Hourglass,
   ListTree,
   Loader2,
+  Notebook,
   Pause,
   Play,
+  RefreshCw,
   Square,
   Sparkles,
   XCircle,
@@ -46,6 +47,18 @@ export const Route = createFileRoute("/_authenticated/workspace")({
 interface Step { i: number; label: string; status: string; note?: string }
 interface TimelineEvent { t: number; icon: string; label: string; detail?: unknown }
 interface ToolEvent { t: number; action: string; args: unknown; result: unknown }
+interface Screenshot {
+  t: number; reason?: string; url?: string; title?: string;
+  tabId?: number; visualSummary?: string;
+}
+type BrowserMemory = {
+  currentObjective?: string;
+  completedObjectives?: string[];
+  visitedUrls?: string[];
+  previousSearches?: string[];
+  knownTabs?: string[];
+  notes?: string;
+};
 
 interface Session {
   id: string;
@@ -56,7 +69,14 @@ interface Session {
   current_step: number;
   timeline: TimelineEvent[];
   tool_history: ToolEvent[];
+  screenshots: Screenshot[];
+  browser_memory: BrowserMemory;
   reasoning: string | null;
+  observation_summary: string | null;
+  page_summary: string | null;
+  waiting_status: string | null;
+  recovery_status: string | null;
+  retry_count: number | null;
   current_url: string | null;
   active_tab_id: number | null;
   started_at: string;
@@ -93,7 +113,6 @@ function Workspace() {
       if (!alive) return;
       const rows = (data ?? []) as unknown as Session[];
       setSessions(rows);
-      // Prefer an active session as selection
       const active = rows.find((r) =>
         ["planning", "running", "waiting", "paused"].includes(r.status),
       );
@@ -137,16 +156,18 @@ function Workspace() {
     }
   }
 
+  const mem = active?.browser_memory ?? {};
+
   return (
     <AppShell>
-      <div className="mx-auto flex h-full max-w-[1500px] flex-col gap-4 p-4">
+      <div className="mx-auto flex h-full max-w-[1600px] flex-col gap-4 p-4">
         <header className="flex items-center justify-between">
           <div>
             <h1 className="font-mono text-lg font-semibold tracking-tight">
               AI Workspace
             </h1>
             <p className="text-xs text-muted-foreground">
-              Persistent agent sessions · live task tree · streaming timeline
+              Hybrid observation · live task tree · browser memory · recovery
             </p>
           </div>
           <Button asChild size="sm" variant="secondary">
@@ -156,8 +177,8 @@ function Workspace() {
           </Button>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[280px_1fr_1fr]">
-          {/* --- Sessions list --- */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 xl:grid-cols-[260px_1fr_1fr_1fr]">
+          {/* ---- Sessions ---- */}
           <Card icon={<Activity className="h-4 w-4" />} title="Sessions" className="flex min-h-0 flex-col">
             <div className="flex-1 overflow-y-auto">
               {loading ? (
@@ -201,7 +222,7 @@ function Workspace() {
             </div>
           </Card>
 
-          {/* --- Task tree + reasoning + controls --- */}
+          {/* ---- Task tree + reasoning + browser state ---- */}
           <section className="flex min-h-0 flex-col gap-4">
             <Card icon={<ListTree className="h-4 w-4" />} title="Task tree" className="flex min-h-0 flex-col">
               {!active ? (
@@ -225,6 +246,12 @@ function Workspace() {
                         </a>
                       )}
                       {active.active_tab_id != null && <span>tab #{active.active_tab_id}</span>}
+                      {(active.retry_count ?? 0) > 0 && (
+                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1 py-px text-amber-300">
+                          <RefreshCw className="mr-1 inline h-2.5 w-2.5" />
+                          {active.retry_count} retries
+                        </span>
+                      )}
                     </div>
                     <div className="flex gap-2 pt-1">
                       {active.status === "paused" ? (
@@ -300,7 +327,80 @@ function Workspace() {
             </Card>
           </section>
 
-          {/* --- Timeline + tool history --- */}
+          {/* ---- Perception column: observation / waiting / recovery / memory ---- */}
+          <section className="flex min-h-0 flex-col gap-4">
+            <Card icon={<Eye className="h-4 w-4" />} title="Observation summary">
+              {active?.observation_summary ? (
+                <>
+                  <div className="text-[13px] leading-relaxed">{active.observation_summary}</div>
+                  {active.page_summary && (
+                    <div className="mt-1 text-[11px] text-muted-foreground">{active.page_summary}</div>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No observation yet. The agent will populate this after
+                  calling <code>companion_observe</code>.
+                </p>
+              )}
+            </Card>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Card icon={<Hourglass className="h-4 w-4" />} title="Waiting on">
+                {active?.waiting_status ? (
+                  <p className="truncate text-xs text-blue-300">{active.waiting_status}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Idle.</p>
+                )}
+              </Card>
+              <Card icon={<RefreshCw className="h-4 w-4" />} title="Recovery">
+                {active?.recovery_status ? (
+                  <p className="text-xs text-amber-300">{active.recovery_status}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No recovery in progress.</p>
+                )}
+              </Card>
+            </div>
+
+            <Card icon={<Notebook className="h-4 w-4" />} title="Browser memory" className="flex min-h-0 flex-col">
+              {!active || Object.keys(mem).length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Empty. The agent adds visited URLs and objectives as it
+                  works.
+                </p>
+              ) : (
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto text-[11px]">
+                  {mem.currentObjective && (
+                    <MemBlock label="Current objective">{mem.currentObjective}</MemBlock>
+                  )}
+                  {mem.completedObjectives?.length ? (
+                    <MemBlock label="Completed">
+                      <ul className="list-disc pl-4">
+                        {mem.completedObjectives.map((o, i) => <li key={i}>{o}</li>)}
+                      </ul>
+                    </MemBlock>
+                  ) : null}
+                  {mem.visitedUrls?.length ? (
+                    <MemBlock label={`Visited (${mem.visitedUrls.length})`}>
+                      <ul className="space-y-0.5">
+                        {mem.visitedUrls.slice(-8).map((u, i) => (
+                          <li key={i} className="truncate text-muted-foreground">{u}</li>
+                        ))}
+                      </ul>
+                    </MemBlock>
+                  ) : null}
+                  {mem.previousSearches?.length ? (
+                    <MemBlock label="Searches">
+                      {mem.previousSearches.slice(-6).join(" · ")}
+                    </MemBlock>
+                  ) : null}
+                  {mem.notes && <MemBlock label="Notes">{mem.notes}</MemBlock>}
+                </div>
+              )}
+            </Card>
+          </section>
+
+          {/* ---- Timeline + tool history + screenshots ---- */}
           <section className="flex min-h-0 flex-col gap-4">
             <Card icon={<Activity className="h-4 w-4" />} title="Timeline" className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 overflow-y-auto font-mono text-[11px]">
@@ -324,11 +424,39 @@ function Workspace() {
               </div>
             </Card>
 
+            <Card icon={<Camera className="h-4 w-4" />} title="Screenshots">
+              {!active || (active.screenshots ?? []).length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Vision fallback only — none captured yet.
+                </p>
+              ) : (
+                <ul className="max-h-32 space-y-1 overflow-y-auto text-[11px]">
+                  {[...active.screenshots].reverse().slice(0, 10).map((s, i) => (
+                    <li key={i} className="rounded border border-border/50 bg-surface/40 p-1.5">
+                      <div className="flex items-center gap-1">
+                        <Camera className="h-2.5 w-2.5 text-primary" />
+                        <span className="truncate font-medium">{s.title || s.url || "screenshot"}</span>
+                        <span className="ml-auto text-muted-foreground">
+                          {new Date(s.t).toLocaleTimeString().split(" ")[0]}
+                        </span>
+                      </div>
+                      {s.reason && (
+                        <div className="mt-0.5 text-muted-foreground">Reason: {s.reason}</div>
+                      )}
+                      {s.visualSummary && (
+                        <div className="mt-0.5 line-clamp-2 text-foreground/80">{s.visualSummary}</div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+
             <Card icon={<CircleDashed className="h-4 w-4" />} title="Tool history">
               {!active || (active.tool_history ?? []).length === 0 ? (
                 <p className="text-xs text-muted-foreground">No tools called yet.</p>
               ) : (
-                <ul className="max-h-40 space-y-1 overflow-y-auto font-mono text-[11px]">
+                <ul className="max-h-32 space-y-1 overflow-y-auto font-mono text-[11px]">
                   {[...active.tool_history].reverse().slice(0, 20).map((t, i) => {
                     const r = t.result as { ok?: boolean; error?: string } | undefined;
                     return (
@@ -348,6 +476,15 @@ function Workspace() {
         </div>
       </div>
     </AppShell>
+  );
+}
+
+function MemBlock({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-foreground/90">{children}</div>
+    </div>
   );
 }
 

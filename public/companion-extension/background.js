@@ -1,16 +1,17 @@
-// OpenAgent Companion — background service worker.
+// OpenAgent Companion — background service worker (v0.3.0, Milestone 9 completion).
 //
 // - Polls Supabase every ~6s for pending commands (MV3 alarms floor).
 // - Chains a fast follow-up poll after each command so multi-step agent loops
 //   feel realtime (Observe → Think → Act).
-// - Rich handlers: navigate, click, fill, wait_for, select, scroll, press_key,
-//   get_dom (structured), get_state, plus tab management.
-// - Injects a glowing "AI working" overlay into every controlled tab and
-//   removes it when the agent is idle.
+// - Rich HYBRID observation: DOM structure + accessibility hints + page state,
+//   returned as one unified object. Screenshots only when the agent asks.
+// - Intelligent waiting: selector / text / visible / enabled / network-idle /
+//   dom-stable / page-ready.
+// - Injects a glowing "AI working" overlay into every controlled tab.
 
 const POLL_ALARM = "openagent-poll";
 const KEEPALIVE_ALARM = "openagent-keepalive";
-const POLL_PERIOD_MIN = 0.1; // 6s — MV3 minimum in production may be 30s
+const POLL_PERIOD_MIN = 0.1; // 6s
 
 // ---------------- config / auth ----------------
 
@@ -116,15 +117,18 @@ async function hideOverlay(tabId) {
 }
 
 // ---------------- Injected page helpers ----------------
-// These run *inside the page* via chrome.scripting.executeScript.
 
-function pageGetDom(opts) {
+// Hybrid observation: structured DOM + semantic landmarks + page state.
+// Returns ONE unified observation object the agent reasons over.
+function pageObserve(opts) {
   const { max = 120, includeText = true } = opts || {};
+  const trim = (s, n = 160) => (s || "").toString().replace(/\s+/g, " ").trim().slice(0, n);
+
+  // --- interactive elements with stable refs ---
   const SELECTABLE = "a,button,input,textarea,select,[role=button],[role=link],[role=textbox],[role=combobox],[role=checkbox],[role=tab],[contenteditable=true]";
-  const nodes = Array.from(document.querySelectorAll(SELECTABLE));
-  const items = [];
+  const interactive = [];
   let idx = 0;
-  for (const el of nodes) {
+  for (const el of document.querySelectorAll(SELECTABLE)) {
     if (idx >= max) break;
     const rect = el.getBoundingClientRect();
     const visible = rect.width > 0 && rect.height > 0 &&
@@ -132,20 +136,24 @@ function pageGetDom(opts) {
     if (!visible) continue;
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute("role") || tag;
-    const label = (el.getAttribute("aria-label") ||
+    const label = trim(
+      el.getAttribute("aria-label") ||
       el.getAttribute("placeholder") ||
       el.getAttribute("name") ||
       el.getAttribute("title") ||
       el.value ||
-      (includeText ? (el.innerText || "").trim().slice(0, 80) : "") ||
-      "").trim();
-    const id = el.id || null;
+      (includeText ? el.innerText : "") ||
+      "",
+      100,
+    );
     const ref = `oa-${idx}`;
     el.setAttribute("data-oa-ref", ref);
-    items.push({
-      ref, tag, role, id,
+    interactive.push({
+      ref, tag, role, id: el.id || null,
       name: el.getAttribute("name") || null,
       type: el.getAttribute("type") || null,
+      disabled: !!el.disabled || el.getAttribute("aria-disabled") === "true",
+      checked: el.checked ?? undefined,
       label,
       href: el.href || null,
       x: Math.round(rect.left), y: Math.round(rect.top),
@@ -153,18 +161,168 @@ function pageGetDom(opts) {
     });
     idx++;
   }
+
+  // --- headings (h1-h4, keep it small) ---
+  const headings = [];
+  for (const h of document.querySelectorAll("h1,h2,h3,h4")) {
+    const t = trim(h.innerText, 140);
+    if (t) headings.push({ level: Number(h.tagName[1]), text: t });
+    if (headings.length >= 25) break;
+  }
+
+  // --- landmarks (nav / main / aside / header / footer + aria roles) ---
+  const landmarks = [];
+  for (const l of document.querySelectorAll(
+    "nav,main,aside,header,footer,[role=navigation],[role=main],[role=banner],[role=contentinfo],[role=complementary],[role=search]",
+  )) {
+    landmarks.push({
+      tag: l.tagName.toLowerCase(),
+      role: l.getAttribute("role") || l.tagName.toLowerCase(),
+      label: trim(l.getAttribute("aria-label") || l.getAttribute("aria-labelledby") || "", 80),
+    });
+    if (landmarks.length >= 20) break;
+  }
+
+  // --- forms ---
+  const forms = [];
+  for (const f of document.querySelectorAll("form")) {
+    const fields = [];
+    for (const el of f.querySelectorAll("input,textarea,select")) {
+      fields.push({
+        name: el.getAttribute("name") || null,
+        type: el.getAttribute("type") || el.tagName.toLowerCase(),
+        label: trim(el.getAttribute("aria-label") || el.getAttribute("placeholder") || "", 60),
+        required: el.required || el.getAttribute("aria-required") === "true",
+      });
+      if (fields.length >= 20) break;
+    }
+    forms.push({
+      action: f.getAttribute("action") || null,
+      method: (f.getAttribute("method") || "get").toLowerCase(),
+      name: f.getAttribute("name") || f.id || null,
+      fields,
+    });
+    if (forms.length >= 10) break;
+  }
+
+  // --- tables (headers + first row samples) ---
+  const tables = [];
+  for (const t of document.querySelectorAll("table")) {
+    const headers = Array.from(t.querySelectorAll("thead th, tr:first-child th"))
+      .map((th) => trim(th.innerText, 60)).slice(0, 12);
+    const rows = t.querySelectorAll("tbody tr, tr").length;
+    tables.push({ headers, rows: Math.min(rows, 9999),
+      caption: trim(t.querySelector("caption")?.innerText, 100) });
+    if (tables.length >= 6) break;
+  }
+
+  // --- lists (short summary only) ---
+  const lists = [];
+  for (const l of document.querySelectorAll("ul,ol")) {
+    const items = l.querySelectorAll("li").length;
+    if (items >= 3 && items <= 200) {
+      lists.push({ tag: l.tagName.toLowerCase(), items,
+        firstItem: trim(l.querySelector("li")?.innerText, 80) });
+    }
+    if (lists.length >= 8) break;
+  }
+
+  // --- dialogs / modals ---
+  const dialogs = [];
+  for (const d of document.querySelectorAll(
+    "dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]",
+  )) {
+    dialogs.push({
+      role: d.getAttribute("role") || d.tagName.toLowerCase(),
+      label: trim(d.getAttribute("aria-label") || d.getAttribute("aria-labelledby") || d.innerText, 200),
+    });
+    if (dialogs.length >= 5) break;
+  }
+
+  // --- error messages (aria-live, role=alert, .error/.error-message) ---
+  const errors = [];
+  for (const e of document.querySelectorAll(
+    "[role=alert],[aria-live=assertive],[aria-live=polite],.error,.error-message,.form-error,[data-error]",
+  )) {
+    const t = trim(e.innerText, 200);
+    if (t) errors.push({ role: e.getAttribute("role") || "alert", text: t });
+    if (errors.length >= 8) break;
+  }
+
+  // --- loading indicators ---
+  const loading = [];
+  for (const s of document.querySelectorAll(
+    "[role=progressbar],[aria-busy=true],.spinner,.loading,.loader,[data-loading=true]",
+  )) {
+    loading.push({
+      role: s.getAttribute("role") || "spinner",
+      label: trim(s.getAttribute("aria-label") || "", 60),
+    });
+    if (loading.length >= 5) break;
+  }
+
+  // --- images with alt text ---
+  const images = [];
+  for (const img of document.querySelectorAll("img[alt]")) {
+    const alt = trim(img.getAttribute("alt"), 140);
+    if (alt) images.push({ alt, src: (img.src || "").slice(0, 200) });
+    if (images.length >= 12) break;
+  }
+
+  // --- meaningful paragraphs (visible, non-trivial length) ---
+  const paragraphs = [];
+  for (const p of document.querySelectorAll("p")) {
+    const t = trim(p.innerText, 240);
+    if (t.length > 40) paragraphs.push(t);
+    if (paragraphs.length >= 8) break;
+  }
+
+  // --- meta description ---
+  const metaDesc = document.querySelector('meta[name="description"]')?.getAttribute("content") || null;
+
+  // --- lightweight page state ---
+  const pageState =
+    document.querySelector("[role=alertdialog],dialog[open]") ? "dialog-open"
+    : loading.length > 0 ? "loading"
+    : errors.length > 0 ? "error"
+    : document.readyState !== "complete" ? "loading"
+    : "ready";
+
+  // --- naive semantic summary ---
+  const summary = [
+    document.title,
+    metaDesc ? `— ${trim(metaDesc, 140)}` : "",
+    interactive.length ? `${interactive.length} controls` : "",
+    forms.length ? `${forms.length} form${forms.length > 1 ? "s" : ""}` : "",
+    tables.length ? `${tables.length} table${tables.length > 1 ? "s" : ""}` : "",
+    errors.length ? `⚠ ${errors.length} error${errors.length > 1 ? "s" : ""}` : "",
+    dialogs.length ? `dialog open` : "",
+  ].filter(Boolean).join(" · ");
+
   return {
     url: location.href,
     title: document.title,
+    metaDescription: metaDesc,
     readyState: document.readyState,
+    pageState,
+    summary,
     scroll: { y: window.scrollY, max: document.documentElement.scrollHeight },
     viewport: { w: window.innerWidth, h: window.innerHeight },
-    elements: items,
+    headings,
+    landmarks,
+    forms,
+    tables,
+    lists,
+    dialogs,
+    errors,
+    loading,
+    images,
+    paragraphs,
+    elements: interactive,
   };
 }
 
 function pageResolve(sel) {
-  // sel may be: { ref: "oa-3" } | { selector: "css" } | { text: "..." } | { label: "..." }
   if (sel.ref) return document.querySelector(`[data-oa-ref="${sel.ref}"]`);
   if (sel.selector) return document.querySelector(sel.selector);
   const wanted = (sel.text || sel.label || "").toLowerCase();
@@ -183,6 +341,7 @@ function pageResolve(sel) {
 function pageClick(sel) {
   const el = pageResolve(sel);
   if (!el) return { ok: false, error: "element not found" };
+  if (el.disabled) return { ok: false, error: "element disabled" };
   el.scrollIntoView({ block: "center", behavior: "instant" });
   el.click();
   return { ok: true, tag: el.tagName.toLowerCase() };
@@ -223,17 +382,62 @@ function pageScroll(args) {
   return { ok: true, y: window.scrollY };
 }
 
+// Intelligent wait — supports many "for" modes.
 async function pageWaitFor(sel, timeoutMs) {
   const deadline = Date.now() + (timeoutMs || 8000);
+  const mode = sel.mode || (sel.selector ? "selector" : sel.text ? "text" : "ready");
+
+  const isVisible = (el) => {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.display !== "none";
+  };
+  const isEnabled = (el) => el && !el.disabled && el.getAttribute("aria-disabled") !== "true";
+
+  const findByText = () => {
+    const wanted = (sel.text || "").toLowerCase();
+    return Array.from(document.querySelectorAll("body *"))
+      .find(e => (e.innerText || "").toLowerCase().includes(wanted));
+  };
+
+  // dom-stable: mutation-observed quiet period
+  if (mode === "dom-stable") {
+    let quietUntil = Date.now() + (sel.quietMs || 500);
+    const obs = new MutationObserver(() => { quietUntil = Date.now() + (sel.quietMs || 500); });
+    obs.observe(document.body, { childList: true, subtree: true, attributes: true });
+    try {
+      while (Date.now() < deadline) {
+        if (Date.now() >= quietUntil) return { ok: true, mode };
+        await new Promise(r => setTimeout(r, 100));
+      }
+      return { ok: false, error: "timeout waiting for dom-stable" };
+    } finally { obs.disconnect(); }
+  }
+
   while (Date.now() < deadline) {
-    const el = sel.selector
-      ? document.querySelector(sel.selector)
-      : (sel.text ? Array.from(document.querySelectorAll("body *"))
-          .find(e => (e.innerText || "").toLowerCase().includes(sel.text.toLowerCase())) : null);
-    if (el) return { ok: true, url: location.href };
+    if (mode === "ready" && document.readyState === "complete") {
+      return { ok: true, mode, url: location.href };
+    }
+    if (mode === "dialog") {
+      const d = document.querySelector("dialog[open],[role=dialog],[role=alertdialog],[aria-modal=true]");
+      if (d) return { ok: true, mode };
+    }
+    if (mode === "selector" || mode === "visible" || mode === "enabled") {
+      const el = sel.selector ? document.querySelector(sel.selector) : (sel.text ? findByText() : null);
+      if (el) {
+        if (mode === "selector") return { ok: true, mode, url: location.href };
+        if (mode === "visible" && isVisible(el)) return { ok: true, mode };
+        if (mode === "enabled" && isEnabled(el) && isVisible(el)) return { ok: true, mode };
+      }
+    }
+    if (mode === "text") {
+      const el = findByText();
+      if (el) return { ok: true, mode, url: location.href };
+    }
     await new Promise(r => setTimeout(r, 200));
   }
-  return { ok: false, error: "timeout" };
+  return { ok: false, error: "timeout", mode };
 }
 
 // ---------------- Handlers ----------------
@@ -249,7 +453,7 @@ async function listTabs() {
 async function openTab({ url, active = true }) {
   const tab = await chrome.tabs.create({ url, active });
   await showOverlay(tab.id);
-  return { id: tab.id, url: tab.url, windowId: tab.windowId };
+  return { id: tab.id, tabId: tab.id, url: tab.url, windowId: tab.windowId };
 }
 
 async function closeTab({ tabId }) {
@@ -273,7 +477,7 @@ async function searchWeb({ query, engine = "google" }) {
   };
   const tab = await chrome.tabs.create({ url: urls[engine] || urls.google, active: true });
   await showOverlay(tab.id);
-  return { id: tab.id, url: tab.pendingUrl || tab.url };
+  return { id: tab.id, tabId: tab.id, url: tab.pendingUrl || tab.url };
 }
 
 async function getActiveTabId(explicitId) {
@@ -282,22 +486,32 @@ async function getActiveTabId(explicitId) {
   return a?.id;
 }
 
-async function navigate({ tabId, url }) {
-  const id = await getActiveTabId(tabId);
-  await chrome.tabs.update(id, { url });
-  await showOverlay(id);
-  // Wait for load
+// Wait for both tabs.onUpdated=complete and a short network-idle window.
+async function waitForNavigation(id, timeoutMs = 15000) {
+  const start = Date.now();
   await new Promise((resolve) => {
+    let done = false;
     const listener = (updatedId, info) => {
-      if (updatedId === id && info.status === "complete") {
+      if (updatedId === id && info.status === "complete" && !done) {
+        done = true;
         chrome.tabs.onUpdated.removeListener(listener);
         resolve();
       }
     };
     chrome.tabs.onUpdated.addListener(listener);
-    setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 12000);
+    setTimeout(() => { if (!done) { chrome.tabs.onUpdated.removeListener(listener); resolve(); } },
+      timeoutMs);
   });
-  return { ok: true, tabId: id };
+  return { elapsedMs: Date.now() - start };
+}
+
+async function navigate({ tabId, url }) {
+  const id = await getActiveTabId(tabId);
+  await chrome.tabs.update(id, { url });
+  await showOverlay(id);
+  await waitForNavigation(id);
+  const tab = await chrome.tabs.get(id).catch(() => null);
+  return { ok: true, tabId: id, url: tab?.url || url };
 }
 
 async function readActiveTab() {
@@ -311,7 +525,7 @@ async function readActiveTab() {
         text: (document.body?.innerText || "").slice(0, 8000),
       }),
     });
-    return res?.result || {};
+    return { ...(res?.result || {}), tabId: id };
   } catch (e) { return { error: String(e) }; }
 }
 
@@ -324,19 +538,19 @@ async function readTab({ tabId }) {
         text: (document.body?.innerText || "").slice(0, 8000),
       }),
     });
-    return res?.result || {};
+    return { ...(res?.result || {}), tabId };
   } catch (e) { return { error: String(e) }; }
 }
 
-async function getDom({ tabId, max, includeText }) {
+async function observe({ tabId, max, includeText }) {
   const id = await getActiveTabId(tabId);
   await showOverlay(id);
   const [res] = await chrome.scripting.executeScript({
     target: { tabId: id },
-    func: pageGetDom,
+    func: pageObserve,
     args: [{ max, includeText }],
   });
-  return res?.result || {};
+  return { ...(res?.result || {}), tabId: id };
 }
 
 async function clickEl({ tabId, ref, selector, text }) {
@@ -345,7 +559,7 @@ async function clickEl({ tabId, ref, selector, text }) {
   const [res] = await chrome.scripting.executeScript({
     target: { tabId: id }, func: pageClick, args: [{ ref, selector, text }],
   });
-  return res?.result || { ok: false };
+  return { ...(res?.result || { ok: false }), tabId: id };
 }
 
 async function fillEl({ tabId, ref, selector, label, value, submit }) {
@@ -355,7 +569,7 @@ async function fillEl({ tabId, ref, selector, label, value, submit }) {
     target: { tabId: id }, func: pageFill,
     args: [{ ref, selector, label }, value, !!submit],
   });
-  return res?.result || { ok: false };
+  return { ...(res?.result || { ok: false }), tabId: id };
 }
 
 async function selectEl({ tabId, ref, selector, value }) {
@@ -363,7 +577,7 @@ async function selectEl({ tabId, ref, selector, value }) {
   const [res] = await chrome.scripting.executeScript({
     target: { tabId: id }, func: pageSelect, args: [{ ref, selector }, value],
   });
-  return res?.result || { ok: false };
+  return { ...(res?.result || { ok: false }), tabId: id };
 }
 
 async function scrollPage({ tabId, to, dy }) {
@@ -371,21 +585,35 @@ async function scrollPage({ tabId, to, dy }) {
   const [res] = await chrome.scripting.executeScript({
     target: { tabId: id }, func: pageScroll, args: [{ to, dy }],
   });
-  return res?.result || { ok: false };
+  return { ...(res?.result || { ok: false }), tabId: id };
 }
 
-async function waitFor({ tabId, selector, text, timeoutMs }) {
+async function waitFor({ tabId, mode, selector, text, timeoutMs, quietMs }) {
   const id = await getActiveTabId(tabId);
   const [res] = await chrome.scripting.executeScript({
-    target: { tabId: id }, func: pageWaitFor, args: [{ selector, text }, timeoutMs],
+    target: { tabId: id }, func: pageWaitFor, args: [{ mode, selector, text, quietMs }, timeoutMs],
   });
-  return res?.result || { ok: false };
+  return { ...(res?.result || { ok: false }), tabId: id };
 }
 
 async function releaseTab({ tabId }) {
   const id = await getActiveTabId(tabId);
   await hideOverlay(id);
   return { ok: true };
+}
+
+// Screenshot fallback — visible viewport of the active tab's window.
+async function screenshot({ tabId, quality = 60 }) {
+  const id = await getActiveTabId(tabId);
+  const tab = await chrome.tabs.get(id);
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
+      format: "jpeg", quality,
+    });
+    return { ok: true, tabId: id, dataUrl, url: tab.url, title: tab.title, capturedAt: Date.now() };
+  } catch (e) {
+    return { ok: false, tabId: id, error: String(e?.message || e) };
+  }
 }
 
 const HANDLERS = {
@@ -397,13 +625,15 @@ const HANDLERS = {
   read_active_tab: readActiveTab,
   read_tab: readTab,
   navigate,
-  get_dom: getDom,
+  observe,
+  get_dom: observe, // back-compat alias — old servers still call get_dom
   click: clickEl,
   fill: fillEl,
   select: selectEl,
   scroll: scrollPage,
   wait_for: waitFor,
   release_tab: releaseTab,
+  screenshot,
   ping: async () => ({ pong: true, at: Date.now() }),
 };
 
@@ -443,7 +673,6 @@ async function poll(chain = true) {
       method: "PATCH", body: JSON.stringify({ last_seen: new Date().toISOString() }),
     });
     if (cmds.length === 0) {
-      // idle — clear overlays on any tabs we still hold
       for (const id of Array.from(controlledTabs)) await hideOverlay(id);
       return;
     }
@@ -455,8 +684,6 @@ async function poll(chain = true) {
       }
       await handleCommand(cfg, c);
     }
-    // Chain: agent loops often enqueue the next command within ~1s of the
-    // previous one finishing. Poll again immediately for snappier feel.
     if (chain) setTimeout(() => poll(false), 300);
   } catch (e) {
     console.warn("[companion] poll", e);
