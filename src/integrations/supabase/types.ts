@@ -44,6 +44,89 @@ export type Database = {
         }
         Relationships: []
       }
+      companion_commands: {
+        Row: {
+          action: string
+          args: Json
+          created_at: string
+          device_id: string | null
+          error: string | null
+          id: string
+          result: Json | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          action: string
+          args?: Json
+          created_at?: string
+          device_id?: string | null
+          error?: string | null
+          id?: string
+          result?: Json | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          action?: string
+          args?: Json
+          created_at?: string
+          device_id?: string | null
+          error?: string | null
+          id?: string
+          result?: Json | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "companion_commands_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "companion_devices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      companion_devices: {
+        Row: {
+          created_at: string
+          id: string
+          kind: string
+          last_seen: string | null
+          name: string
+          paired_at: string | null
+          pairing_code: string | null
+          token_hash: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          kind?: string
+          last_seen?: string | null
+          name: string
+          paired_at?: string | null
+          pairing_code?: string | null
+          token_hash: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          kind?: string
+          last_seen?: string | null
+          name?: string
+          paired_at?: string | null
+          pairing_code?: string | null
+          token_hash?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       conversations: {
         Row: {
           archived: boolean
@@ -68,6 +151,39 @@ export type Database = {
           title?: string
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      installed_plugins: {
+        Row: {
+          created_at: string
+          enabled: boolean
+          id: string
+          manifest: Json
+          name: string
+          plugin_id: string
+          user_id: string
+          version: string
+        }
+        Insert: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          manifest: Json
+          name: string
+          plugin_id: string
+          user_id: string
+          version: string
+        }
+        Update: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          manifest?: Json
+          name?: string
+          plugin_id?: string
+          user_id?: string
+          version?: string
         }
         Relationships: []
       }
@@ -231,6 +347,39 @@ export type Database = {
           label?: string | null
           provider?: string
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      screen_recordings: {
+        Row: {
+          created_at: string
+          duration_ms: number | null
+          id: string
+          mime_type: string
+          size_bytes: number | null
+          storage_path: string
+          title: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          duration_ms?: number | null
+          id?: string
+          mime_type?: string
+          size_bytes?: number | null
+          storage_path: string
+          title: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          duration_ms?: number | null
+          id?: string
+          mime_type?: string
+          size_bytes?: number | null
+          storage_path?: string
+          title?: string
           user_id?: string
         }
         Relationships: []

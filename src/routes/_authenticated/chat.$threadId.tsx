@@ -17,6 +17,7 @@ import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/app-shell";
+import { AgentActivity } from "@/components/agent-activity";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
@@ -92,7 +93,21 @@ function ChatThread() {
     },
   });
 
-  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat" }), []);
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        fetch: async (url, init) => {
+          const { data } = await supabase.auth.getSession();
+          const headers = new Headers(init?.headers);
+          if (data.session?.access_token) {
+            headers.set("Authorization", `Bearer ${data.session.access_token}`);
+          }
+          return fetch(url, { ...init, headers });
+        },
+      }),
+    [],
+  );
 
   const { messages, sendMessage, status, setMessages, error } = useChat({
     id: threadId,
@@ -228,54 +243,59 @@ function ChatThread() {
         </Button>
       }
     >
-      <div className="flex h-full flex-col">
-        <div ref={scrollRef} className="flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-3xl space-y-5 p-4 md:p-6">
-            {initialMessages.isLoading ? (
-              <div className="text-sm text-muted-foreground">Loading…</div>
-            ) : messages.length === 0 ? (
-              <EmptyState />
-            ) : (
-              messages.map((m) => <MessageBubble key={m.id} m={m} />)
-            )}
-            {status === "submitted" && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 animate-spin" /> Thinking…
-              </div>
-            )}
-            {error && (
-              <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
-                {error.message}
-              </div>
-            )}
+      <div className="grid h-full grid-cols-1 md:grid-cols-[1fr_320px]">
+        <div className="flex h-full min-w-0 flex-col border-r border-border/60">
+          <div ref={scrollRef} className="flex-1 overflow-y-auto">
+            <div className="mx-auto w-full max-w-3xl space-y-5 p-4 md:p-6">
+              {initialMessages.isLoading ? (
+                <div className="text-sm text-muted-foreground">Loading…</div>
+              ) : messages.length === 0 ? (
+                <EmptyState />
+              ) : (
+                messages.map((m) => <MessageBubble key={m.id} m={m} />)
+              )}
+              {status === "submitted" && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Thinking…
+                </div>
+              )}
+              {error && (
+                <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+                  {error.message}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
 
-        <form
-          onSubmit={onSubmit}
-          className="border-t border-border/60 bg-background/80 p-3 backdrop-blur md:p-4"
-        >
-          <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
-            <Textarea
-              ref={taRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void onSubmit(e as unknown as React.FormEvent);
-                }
-              }}
-              placeholder="Ask the agent to do something…"
-              className="min-h-[44px] max-h-40 resize-none"
-              rows={1}
-              disabled={isLoading}
-            />
-            <Button type="submit" disabled={isLoading || !input.trim()}>
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
-        </form>
+          <form
+            onSubmit={onSubmit}
+            className="border-t border-border/60 bg-background/80 p-3 backdrop-blur md:p-4"
+          >
+            <div className="mx-auto flex w-full max-w-3xl items-end gap-2">
+              <Textarea
+                ref={taRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void onSubmit(e as unknown as React.FormEvent);
+                  }
+                }}
+                placeholder="Ask the agent to do something…"
+                className="min-h-[44px] max-h-40 resize-none"
+                rows={1}
+                disabled={isLoading}
+              />
+              <Button type="submit" disabled={isLoading || !input.trim()}>
+                <Send className="h-4 w-4" />
+              </Button>
+            </div>
+          </form>
+        </div>
+        <div className="hidden min-h-0 p-3 md:block">
+          <AgentActivity className="h-full" />
+        </div>
       </div>
     </AppShell>
   );
