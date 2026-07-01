@@ -66,3 +66,15 @@ Current as of Milestone 9 completion pass.
 - All companion capabilities are gated by explicit device pairing. Once
   paired, any authenticated OpenAgent session with the same user can enqueue
   commands. Fine-grained per-action approval (M18) will replace this.
+
+## Ultimate completion pass gaps
+- File uploads and download interception are not implemented in the MV3
+  extension. Uploads require a native file picker interaction and downloads
+  can't be silently redirected under browser security. Tracked for M12
+  (desktop companion).
+- Per-session performance metrics (observation/reasoning/action latency,
+  tool calls per task) are visible on the timeline but there is no
+  aggregate dashboard yet — that lands with M11 multi-session concurrency.
+- End-to-end suite on Google / YouTube / Wikipedia / GitHub / dynamic
+  sites requires a paired companion in a real Chrome; not runnable from
+  the sandbox. Manual test plan is documented in `docs/M9_VERIFICATION.md`.
