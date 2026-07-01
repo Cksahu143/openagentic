@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as AuthenticatedTasksRouteImport } from './routes/_authenticated/tasks'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedRecordingsRouteImport } from './routes/_authenticated/recordings'
 import { Route as AuthenticatedProvidersRouteImport } from './routes/_authenticated/providers'
 import { Route as AuthenticatedPermissionsRouteImport } from './routes/_authenticated/permissions'
 import { Route as AuthenticatedMemoryRouteImport } from './routes/_authenticated/memory'
@@ -52,6 +53,11 @@ const AuthenticatedTasksRoute = AuthenticatedTasksRouteImport.update({
 const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedRecordingsRoute = AuthenticatedRecordingsRouteImport.update({
+  id: '/recordings',
+  path: '/recordings',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedProvidersRoute = AuthenticatedProvidersRouteImport.update({
@@ -112,6 +118,7 @@ export interface FileRoutesByFullPath {
   '/memory': typeof AuthenticatedMemoryRoute
   '/permissions': typeof AuthenticatedPermissionsRoute
   '/providers': typeof AuthenticatedProvidersRoute
+  '/recordings': typeof AuthenticatedRecordingsRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/tasks': typeof AuthenticatedTasksRoute
   '/api/chat': typeof ApiChatRoute
@@ -128,6 +135,7 @@ export interface FileRoutesByTo {
   '/memory': typeof AuthenticatedMemoryRoute
   '/permissions': typeof AuthenticatedPermissionsRoute
   '/providers': typeof AuthenticatedProvidersRoute
+  '/recordings': typeof AuthenticatedRecordingsRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/tasks': typeof AuthenticatedTasksRoute
   '/api/chat': typeof ApiChatRoute
@@ -146,6 +154,7 @@ export interface FileRoutesById {
   '/_authenticated/memory': typeof AuthenticatedMemoryRoute
   '/_authenticated/permissions': typeof AuthenticatedPermissionsRoute
   '/_authenticated/providers': typeof AuthenticatedProvidersRoute
+  '/_authenticated/recordings': typeof AuthenticatedRecordingsRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/tasks': typeof AuthenticatedTasksRoute
   '/api/chat': typeof ApiChatRoute
@@ -164,6 +173,7 @@ export interface FileRouteTypes {
     | '/memory'
     | '/permissions'
     | '/providers'
+    | '/recordings'
     | '/settings'
     | '/tasks'
     | '/api/chat'
@@ -180,6 +190,7 @@ export interface FileRouteTypes {
     | '/memory'
     | '/permissions'
     | '/providers'
+    | '/recordings'
     | '/settings'
     | '/tasks'
     | '/api/chat'
@@ -197,6 +208,7 @@ export interface FileRouteTypes {
     | '/_authenticated/memory'
     | '/_authenticated/permissions'
     | '/_authenticated/providers'
+    | '/_authenticated/recordings'
     | '/_authenticated/settings'
     | '/_authenticated/tasks'
     | '/api/chat'
@@ -253,6 +265,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/recordings': {
+      id: '/_authenticated/recordings'
+      path: '/recordings'
+      fullPath: '/recordings'
+      preLoaderRoute: typeof AuthenticatedRecordingsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/providers': {
@@ -329,6 +348,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedMemoryRoute: typeof AuthenticatedMemoryRoute
   AuthenticatedPermissionsRoute: typeof AuthenticatedPermissionsRoute
   AuthenticatedProvidersRoute: typeof AuthenticatedProvidersRoute
+  AuthenticatedRecordingsRoute: typeof AuthenticatedRecordingsRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedTasksRoute: typeof AuthenticatedTasksRoute
   AuthenticatedChatThreadIdRoute: typeof AuthenticatedChatThreadIdRoute
@@ -343,6 +363,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedMemoryRoute: AuthenticatedMemoryRoute,
   AuthenticatedPermissionsRoute: AuthenticatedPermissionsRoute,
   AuthenticatedProvidersRoute: AuthenticatedProvidersRoute,
+  AuthenticatedRecordingsRoute: AuthenticatedRecordingsRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedTasksRoute: AuthenticatedTasksRoute,
   AuthenticatedChatThreadIdRoute: AuthenticatedChatThreadIdRoute,
