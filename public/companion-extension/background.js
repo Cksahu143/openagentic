@@ -338,14 +338,60 @@ function pageResolve(sel) {
   return null;
 }
 
-function pageClick(sel) {
+async function pageClick(sel) {
   const el = pageResolve(sel);
   if (!el) return { ok: false, error: "element not found" };
-  if (el.disabled) return { ok: false, error: "element disabled" };
-  el.scrollIntoView({ block: "center", behavior: "instant" });
-  el.click();
-  return { ok: true, tag: el.tagName.toLowerCase() };
+  if (el.disabled || el.getAttribute("aria-disabled") === "true") {
+    return { ok: false, error: "element disabled" };
+  }
+  const urlBefore = location.href;
+  const htmlBefore = document.documentElement.outerHTML.length;
+
+  // 1. Scroll into view and settle a frame.
+  el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  await new Promise((r) => requestAnimationFrame(() => r(null)));
+
+  // 2. Verify visible + not occluded.
+  const rect = el.getBoundingClientRect();
+  const cs = getComputedStyle(el);
+  if (rect.width === 0 || rect.height === 0 || cs.visibility === "hidden" || cs.display === "none") {
+    return { ok: false, error: "element not visible after scroll" };
+  }
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const hit = document.elementFromPoint(cx, cy);
+  const occluded = hit && hit !== el && !el.contains(hit) && !hit.contains(el);
+
+  // 3. Try native click first.
+  let method = "click";
+  try { el.click(); } catch { /* ignore */ }
+
+  // 4. If nothing changed AND we detected occlusion, retry with a synthesized
+  //    pointer/mouse sequence at the rect center (bypasses transparent overlays
+  //    that don't intercept synthesized events).
+  const changed = () =>
+    location.href !== urlBefore ||
+    document.documentElement.outerHTML.length !== htmlBefore;
+  await new Promise((r) => setTimeout(r, 60));
+  if (occluded && !changed()) {
+    method = "synthesized";
+    const opts = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0 };
+    for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+      el.dispatchEvent(new MouseEvent(type, opts));
+    }
+    await new Promise((r) => setTimeout(r, 40));
+  }
+
+  return {
+    ok: true,
+    tag: el.tagName.toLowerCase(),
+    method,
+    occluded: !!occluded,
+    urlChanged: location.href !== urlBefore,
+    urlAfter: location.href,
+  };
 }
+
 
 function pageFill(sel, value, submit) {
   const el = pageResolve(sel);
