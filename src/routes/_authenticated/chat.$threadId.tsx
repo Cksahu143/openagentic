@@ -17,6 +17,7 @@ import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/app-shell";
+import { AgentActivity } from "@/components/agent-activity";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
