@@ -103,7 +103,23 @@ RULES:
   DOM cannot describe the UI.
 - If a companion tool errors with "No companion device", tell the user to
   install & pair the extension (Devices page) and STOP.
-- Report progress in short markdown updates as you go.`;
+- Report progress in short markdown updates as you go.
+
+FAST PATH (high-speed execution) — for simple, high-confidence actions
+(clicking a labelled button you just observed, typing into a labelled
+field, selecting a dropdown value, opening a known URL, switching to a
+listed tab):
+  - Skip re-observing if the last observation is <5 s old and the URL
+    hasn't changed. Reuse its refs.
+  - Batch: several fills into the same form can run back-to-back before
+    the next observe. Always observe once after the final submit.
+  - Skip set_reasoning for a single trivial action inside a larger plan.
+  - companion_click returns { urlChanged, method, occluded } — treat
+    urlChanged:true (for link/submit clicks) as verification and skip the
+    extra observe.
+For anything ambiguous, novel, or after a failure — fall back to the full
+Observe → Think → Act → Verify loop.`;
+
 
 
 async function getUserIdFromRequest(request: Request): Promise<string | null> {
