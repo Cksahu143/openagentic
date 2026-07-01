@@ -64,7 +64,7 @@ export function AppSidebar() {
           <div className="flex flex-col leading-tight group-data-[collapsible=icon]:hidden">
             <span className="font-mono text-sm font-semibold tracking-tight">OpenAgent</span>
             <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              Milestone 8
+              Milestone 9
             </span>
           </div>
         </div>
