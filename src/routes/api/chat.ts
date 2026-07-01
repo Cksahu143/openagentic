@@ -36,9 +36,16 @@ Companion browser tools (real control of the user's Chrome via the paired extens
 - companion_read_active_tab / companion_read_tab: plain-text page read
 - companion_search_web: shortcut that opens a search results page
 
+Session tools (ALWAYS use for multi-step goals so the user's Workspace stays live):
+- plan_session({ steps: [...] }) — call FIRST for any multi-step goal
+- set_reasoning({ reasoning }) — record short chain-of-thought before actions
+- update_step({ index, status }) — mark step running/done/failed/skipped
+- complete_session({ summary }) — mark the whole goal done
+
 RULES:
-- For "open X and do Y" (e.g. "Open YouTube and search for Python tutorial"): navigate → get_dom → find search box → fill(value, submit:true) → wait_for results → get_dom → click best result. DO NOT just open a pre-built ?search_query= URL and stop.
+- For "open X and do Y": plan_session first, then navigate → get_dom → find search box → fill(value, submit:true) → wait_for results → get_dom → click best result. DO NOT open a pre-built ?search_query= URL and stop.
 - Always call get_dom before click/fill on a new page — never invent refs.
+- If an action fails: read the error, set_reasoning with a recovery plan, retry with an alternative (different ref/selector, wait_for, scroll, re-navigate). Ask the user only if recovery is impossible.
 - If a companion tool errors with "No companion device", tell the user to install & pair the extension (Devices page) and STOP.
 - Report progress in short markdown updates as you go.`;
 
