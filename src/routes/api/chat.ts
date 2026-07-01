@@ -183,6 +183,66 @@ export const Route = createFileRoute("/api/chat")({
           messages: await convertToModelMessages(body.messages as UIMessage[]),
           stopWhen: stepCountIs(50),
           tools: {
+            plan_session: tool({
+              description:
+                "FIRST STEP for any multi-step browser goal. Create a live task tree of ordered steps the agent will execute. Steps appear in the user's Workspace immediately.",
+              inputSchema: z.object({
+                steps: z.array(z.string().min(2).max(160)).min(1).max(20),
+              }),
+              execute: async ({ steps }) => {
+                const tree = steps.map((label, i) => ({ i, label, status: "pending" }));
+                await patchSession({ task_tree: tree as never, current_step: 0, status: "running" });
+                await appendTimeline("📋", "Plan created", { steps });
+                return { ok: true, sessionId, steps: tree };
+              },
+            }),
+            update_step: tool({
+              description:
+                "Mark a task-tree step as running / done / failed. Call this as you progress so the user's Workspace shows live progress.",
+              inputSchema: z.object({
+                index: z.number().int().min(0),
+                status: z.enum(["running", "done", "failed", "skipped"]),
+                note: z.string().max(400).optional(),
+              }),
+              execute: async ({ index, status, note }) => {
+                if (!sessionId) return { ok: false, error: "no session" };
+                const { data: row } = await supabaseAdmin
+                  .from("agent_sessions").select("task_tree").eq("id", sessionId).maybeSingle();
+                const tree = Array.isArray(row?.task_tree) ? (row!.task_tree as Array<Record<string, unknown>>) : [];
+                if (tree[index]) { tree[index].status = status; if (note) tree[index].note = note; }
+                await patchSession({ task_tree: tree as never, current_step: index });
+                await appendTimeline(
+                  status === "done" ? "✅" : status === "failed" ? "❌" : status === "skipped" ? "⏭" : "▶️",
+                  `Step ${index + 1}: ${status}`,
+                  { note },
+                );
+                return { ok: true };
+              },
+            }),
+            set_reasoning: tool({
+              description:
+                "Record your current chain-of-thought / reasoning so the user can see WHY the agent is doing what it's doing. Keep it short — 1-3 sentences.",
+              inputSchema: z.object({ reasoning: z.string().min(1).max(600) }),
+              execute: async ({ reasoning }) => {
+                await patchSession({ reasoning });
+                await appendTimeline("💭", "Thinking", { reasoning });
+                return { ok: true };
+              },
+            }),
+            complete_session: tool({
+              description: "Mark the current agent session complete when the goal is fully done.",
+              inputSchema: z.object({ summary: z.string().max(600).optional() }),
+              execute: async ({ summary }) => {
+                await patchSession({
+                  status: "completed",
+                  completed_at: new Date().toISOString(),
+                  reasoning: summary,
+                });
+                await appendTimeline("🎉", "Goal completed", { summary });
+                return { ok: true };
+              },
+            }),
+
             save_memory: tool({
               description:
                 "Save something the user wants the agent to remember (workflow, preference, site, note, fact).",
