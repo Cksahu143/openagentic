@@ -3,14 +3,23 @@
 Current as of Milestone 9 completion pass.
 
 ## Autonomy
-- Recovery is model-driven, not deterministic — the LLM decides when to
-  retry. `record_recovery` bumps a counter and updates the Workspace, but
-  there is no hard cap enforced by the server.
+- Recovery is server-capped but model-driven: `record_recovery` enforces
+  MAX 4 attempts per step and 8 per session, with exponential backoff
+  (400 / 800 / 1600 / 3200 / 5000 ms). When capped, the tool returns
+  `{ capped: true }` and the model is instructed to escalate
+  (`update_step` failed, ask the user, or move on) — but a misbehaving
+  model could still ignore that signal on a subsequent turn.
+- Verification is criteria-based, not deterministic: an action counts as
+  successful only when the next observation shows a URL change, a new
+  expected element, a matching field value, `pageState:"ready"` after a
+  redirect, or a known success text. Sites that succeed silently (no DOM
+  change) can be mis-classified as failures and burn retry budget.
 - Pause takes effect at tool-call boundaries; an in-flight companion
   command (e.g. `navigate` waiting for `complete`) finishes before pause
   can stop it.
 - Cancelled sessions still leave the companion overlay on the last tab
   until the extension's next idle poll (~6 s).
+
 
 ## Observation
 - `companion_observe` samples up to 120 interactive elements and short

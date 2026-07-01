@@ -1,5 +1,22 @@
 # OpenAgent Changelog
 
+## Milestone 9 (reliability tuning)
+
+### Changed
+- **Recovery caps & backoff** — `record_recovery` now enforces
+  MAX_PER_STEP=4 and MAX_PER_SESSION=8 with exponential backoff
+  (400 / 800 / 1600 / 3200 / 5000 ms). Returns
+  `{ attempt, backoffMs, capped, perStep, perSession }` so the model
+  can wait, retry, or escalate deterministically. Cap-reached events
+  surface in the Workspace timeline (🛑) and `recovery_status`.
+- **Verification criteria** documented in the system prompt: an ACT
+  succeeds only when the next observation shows a URL change, an
+  expected new element, a matching field value, `pageState:"ready"`
+  after a redirect, or a known success text — otherwise recovery
+  triggers. Improves reliability on slow / redirect-heavy sites.
+
+
+
 ## Milestone 9 (completion pass)
 
 **Hybrid observation & real autonomous agent**

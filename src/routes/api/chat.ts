@@ -36,10 +36,30 @@ LOOP:
   4. VERIFY by observing again (or companion_wait_for) BEFORE the next act.
      Never assume an action succeeded.
   5. On failure: read the error → set_reasoning with a recovery plan →
-     record_recovery({ attempt, strategy }) → retry with an alternative
-     (different ref/selector, wait_for visible/enabled, scroll, re-navigate,
-     dismiss dialog, screenshot fallback). Ask the user only if recovery is
-     impossible.
+     record_recovery({ attempt, strategy }) → wait the returned backoffMs →
+     retry with an ALTERNATIVE (different ref/selector, wait_for
+     visible/enabled, scroll, re-navigate, dismiss dialog, screenshot
+     fallback). Never repeat the exact same action after a failure.
+
+RECOVERY CAPS (server-enforced):
+  - Max 4 recovery attempts per step, 8 per session.
+  - record_recovery returns { attempt, backoffMs, capped }. When
+    capped:true, STOP retrying that step: escalate via update_step
+    status:"failed", set_reasoning why, and either try a different
+    step, ask the user, or complete_session with the partial result.
+  - Backoff is exponential (400ms → 800ms → 1600ms → 3200ms, capped
+    5000ms). Honor it via companion_wait_for mode:"dom-stable" or a
+    short delay before the next act.
+
+VERIFICATION CRITERIA — after every ACT, an action is only "successful"
+when at least ONE of these holds on the NEXT observation:
+  - the target URL changed as expected (navigate/click that follows a link),
+  - a new element referenced by the plan appears (post-click UI, dialog,
+    result list, next form step),
+  - the field value in \`elements[]\` matches what you typed (fill/select),
+  - a redirected/final URL settled with pageState:"ready" (slow sites),
+  - a known success text/toast/heading appears (search results, "Signed in").
+If NONE hold, treat the step as failed and enter the recovery flow above.
 
 INTELLIGENT WAITING — companion_wait_for modes:
   - mode:"selector"  — CSS selector exists
@@ -49,7 +69,9 @@ INTELLIGENT WAITING — companion_wait_for modes:
   - mode:"ready"     — document.readyState === "complete"
   - mode:"dialog"    — a modal dialog opens
   - mode:"dom-stable"— DOM stops mutating (quietMs, default 500)
-Use these instead of fixed sleeps.
+Use these instead of fixed sleeps. On slow or redirect-heavy sites,
+chain: wait_for ready → wait_for dom-stable → observe.
+
 
 BROWSER MEMORY — call set_browser_memory to remember, for the current session:
   - visitedUrls, previousSearches, completedObjectives, currentObjective,
@@ -310,25 +332,57 @@ export const Route = createFileRoute("/api/chat")({
             }),
             record_recovery: tool({
               description:
-                "Record a recovery attempt after an action failed. Increments retry_count and updates recovery_status shown in the Workspace.",
+                "Record a recovery attempt after an action failed. Increments retry_count and returns { attempt, backoffMs, capped, perStep, perSession }. Server enforces MAX_PER_STEP=4 and MAX_PER_SESSION=8; when capped:true STOP retrying that step and escalate (update_step failed, ask user, or move on).",
               inputSchema: z.object({
                 strategy: z.string().min(2).max(300),
-                attempt: z.number().int().min(1).max(10).optional(),
+                attempt: z.number().int().min(1).max(20).optional(),
+                stepIndex: z.number().int().min(0).max(200).optional(),
                 note: z.string().max(400).optional(),
               }),
-              execute: async ({ strategy, attempt, note }) => {
+              execute: async ({ strategy, attempt, stepIndex, note }) => {
                 if (!sessionId) return { ok: false };
+                const MAX_PER_STEP = 4;
+                const MAX_PER_SESSION = 8;
+                const BACKOFFS = [400, 800, 1600, 3200, 5000];
+
                 const { data: row } = await supabaseAdmin
-                  .from("agent_sessions").select("retry_count").eq("id", sessionId).maybeSingle();
-                const next = (row?.retry_count ?? 0) + 1;
+                  .from("agent_sessions")
+                  .select("retry_count, tool_history, current_step")
+                  .eq("id", sessionId)
+                  .maybeSingle();
+                const perSession = (row?.retry_count ?? 0) + 1;
+                const effectiveStep =
+                  typeof stepIndex === "number" ? stepIndex : (row?.current_step ?? 0);
+                // Count prior recovery events for this step from tool_history.
+                const history = Array.isArray(row?.tool_history) ? row!.tool_history as Array<Record<string, unknown>> : [];
+                const priorForStep = history.filter(
+                  (h) => h?.tool === "record_recovery" && (h?.stepIndex ?? -1) === effectiveStep,
+                ).length;
+                const perStep = priorForStep + 1;
+                const capped = perStep > MAX_PER_STEP || perSession > MAX_PER_SESSION;
+                const backoffMs = capped
+                  ? 0
+                  : BACKOFFS[Math.min(perStep - 1, BACKOFFS.length - 1)];
+
                 await patchSession({
-                  retry_count: attempt ?? next,
-                  recovery_status: strategy.slice(0, 300),
+                  retry_count: attempt ?? perSession,
+                  recovery_status: capped
+                    ? `CAPPED after ${perStep - 1} attempts on step ${effectiveStep}: ${strategy.slice(0, 240)}`
+                    : `${strategy.slice(0, 260)} (attempt ${perStep}/${MAX_PER_STEP}, backoff ${backoffMs}ms)`,
+                  waiting_status: capped ? null : `backoff ${backoffMs}ms`,
                 });
-                await appendTimeline("🔁", `Recovery: ${strategy}`, { note, attempt: attempt ?? next });
-                return { ok: true, attempt: attempt ?? next };
+                await appendTool("record_recovery", { strategy, stepIndex: effectiveStep, note }, { attempt: perStep, backoffMs, capped });
+                await appendTimeline(
+                  capped ? "🛑" : "🔁",
+                  capped
+                    ? `Recovery cap reached (step ${effectiveStep})`
+                    : `Recovery ${perStep}/${MAX_PER_STEP}: ${strategy}`,
+                  { note, backoffMs, perSession, perStep },
+                );
+                return { ok: true, attempt: perStep, backoffMs, capped, perStep, perSession };
               },
             }),
+
             set_browser_memory: tool({
               description:
                 "Merge fields into the current session's browser memory (visitedUrls, previousSearches, completedObjectives, currentObjective, knownTabs, notes). Arrays are unioned; scalars overwrite.",

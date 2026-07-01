@@ -99,3 +99,31 @@ The Workspace subscribes to `postgres_changes` on `agent_sessions` and
 renders every field live: task tree, reasoning, observation summary,
 waiting status, recovery status, browser memory, screenshot log, timeline,
 tool history, plus pause/resume/cancel controls.
+
+### Recovery caps and verification
+
+The reasoning loop is Observe → Think → Act → **Verify** → (Recover).
+
+Verification criteria — after every ACT, an action is only "successful"
+when the next observation shows at least one of:
+
+- the URL changed to the expected target,
+- a new element referenced by the plan appears (dialog, result, next step),
+- a filled/selected field's value matches the input,
+- `pageState:"ready"` settled after a redirect chain,
+- a known success text/toast/heading appears.
+
+Otherwise the model calls `record_recovery`, which is server-capped:
+
+- `MAX_PER_STEP = 4` recovery attempts on the same task-tree step,
+- `MAX_PER_SESSION = 8` recovery attempts across the whole session,
+- exponential backoff `[400, 800, 1600, 3200, 5000] ms` returned as
+  `backoffMs`; the model waits before the next act.
+
+`record_recovery` returns `{ attempt, backoffMs, capped, perStep,
+perSession }`. When `capped:true`, the model is instructed to stop
+retrying and escalate: mark the step failed via `update_step`, ask the
+user, try a different step, or `complete_session` with a partial result.
+Caps and backoff surface in `recovery_status` / `waiting_status` on
+`agent_sessions` so the Workspace shows them live.
+
