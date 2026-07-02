@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>OpenAgent Workspace</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <h1>OpenAgent</h1>
+        <p class="tag">Phase 1 · single-step PRPAVL</p>
+      </div>
+    </div>
+    <details class="settings">
+      <summary>Settings</summary>
+      <label>Anthropic API key
+        <input id="api-key" type="password" placeholder="sk-ant-..." autocomplete="off" />
+      </label>
+      <label>Model
+        <input id="model" type="text" placeholder="claude-sonnet-4-5" />
+      </label>
+      <label class="row"><input id="cursor-visible" type="checkbox" checked /> Show AI cursor</label>
+      <button id="save-settings">Save</button>
+    </details>
+  </header>
+
+  <section class="composer">
+    <textarea id="goal" placeholder="Type a task, e.g. &quot;search for openagent and click the first result&quot;"></textarea>
+    <div class="controls">
+      <button id="start" class="primary">Start</button>
+      <button id="pause">Pause</button>
+      <button id="resume">Resume</button>
+      <button id="cancel" class="danger">Cancel</button>
+    </div>
+  </section>
+
+  <section id="confirm-panel" class="confirm hidden">
+    <h3>Guardrail check</h3>
+    <p id="confirm-reason"></p>
+    <div class="controls">
+      <button id="confirm-approve" class="primary">Approve</button>
+      <button id="confirm-deny" class="danger">Deny</button>
+    </div>
+  </section>
+
+  <section class="timeline">
+    <div class="section-title">Timeline</div>
+    <ol id="timeline"></ol>
+  </section>
+
+  <section class="metrics">
+    <div class="section-title">Latency (p95)</div>
+    <div id="metrics">—</div>
+  </section>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>
