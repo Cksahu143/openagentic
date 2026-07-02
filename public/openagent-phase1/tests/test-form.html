@@ -1,0 +1,56 @@
+<!doctype html>
+<!--
+  Phase 1 fault-injection test page.
+  Covers: real event dispatch on a React-like controlled input, cookie-banner
+  recovery (rung 3), a decoy button to force a `contradicted` verdict, and a
+  destructive "Delete Account" button to trigger the guardrail.
+
+  Load this file locally (file:// or via any static server) and open the
+  OpenAgent side panel to run tasks against it.
+-->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>OpenAgent Phase 1 — Test Page</title>
+  <style>
+    body { font: 14px system-ui; padding: 24px; max-width: 640px; margin: auto; }
+    input, button { font: inherit; padding: 8px 12px; border-radius: 6px; border: 1px solid #ccc; }
+    button { cursor: pointer; }
+    .banner { position: fixed; inset: auto 0 0 0; background: #111; color: white; padding: 14px; display: flex; justify-content: space-between; }
+    .banner button { background: #22c55e; color: white; border: none; }
+    .result { margin-top: 12px; padding: 12px; background: #f1f5f9; border-radius: 6px; }
+    .decoy { position: absolute; opacity: 0.001; }
+  </style>
+</head>
+<body>
+  <h1>OpenAgent Test Page</h1>
+
+  <label>Search
+    <input id="q" type="search" name="q" aria-label="Search query" placeholder="Type here..." />
+  </label>
+  <button id="submit" onclick="onSubmit()">Submit</button>
+  <button id="delete" onclick="alert('Deleted!')">Delete Account</button>
+
+  <!-- Decoy overlay for contradicted-verdict test -->
+  <button class="decoy" id="decoy" onclick="document.getElementById('r').textContent='DECOY CLICKED'">decoy</button>
+
+  <div class="result" id="r">No submission yet.</div>
+
+  <!-- Fake cookie banner covering the submit button; rung 3 should dismiss. -->
+  <div class="banner" id="cookie">
+    We use cookies to make the site work.
+    <button onclick="document.getElementById('cookie').remove()">Accept</button>
+  </div>
+
+  <script>
+    // React-like value tracking: reject direct .value writes, accept only real input events.
+    const q = document.getElementById("q");
+    let last = "";
+    q.addEventListener("input", (e) => { last = e.target.value; });
+    function onSubmit() {
+      const r = document.getElementById("r");
+      r.textContent = last ? `Submitted: ${last}` : "Empty submission.";
+    }
+  </script>
+</body>
+</html>
