@@ -2,7 +2,7 @@
 // No engine imports; validates envelope schema + pub/sub delivery only.
 import { on, publish } from "../shared/event-bus.js";
 
-globalThis.crypto = globalThis.crypto || { randomUUID: () => "test-" + Math.random() };
+if (!globalThis.crypto) Object.defineProperty(globalThis, "crypto", { value: { randomUUID: () => "test-" + Math.random() } });
 
 let seen = null;
 on("log", (env) => { seen = env; });
