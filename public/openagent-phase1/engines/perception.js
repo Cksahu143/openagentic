@@ -134,15 +134,18 @@ export function snapshot({ full = false, force = false } = {}) {
     at: Date.now(),
   };
   lastSnapshotAt = snap.at;
+  putSnapshot(snap);
+  for (const e of items) if (e.name) rememberSelector(e.name, e.ref);
   return snap;
 }
 
 let debounceTimer = null;
 export function startObserver() {
   const mo = new MutationObserver(() => {
+    bumpMutation();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      const s = snapshot();
+      const s = snapshot({ force: true });
       publish("perception.snapshot.ready", s);
     }, 75);
   });
