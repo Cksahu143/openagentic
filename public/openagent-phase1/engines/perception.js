@@ -82,7 +82,11 @@ function role(el) {
   return t.toLowerCase();
 }
 
-export function snapshot({ full = false } = {}) {
+export function snapshot({ full = false, force = false } = {}) {
+  if (!force) {
+    const fresh = getFreshSnapshot();
+    if (fresh && !full) return fresh;
+  }
   const t0 = performance.now();
   const url = location.href;
   const title = document.title;
