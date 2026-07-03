@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { insertMessageSafe, flushMessageQueue } from "@/lib/client-message-queue";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
@@ -124,14 +125,14 @@ function ChatThread() {
         const { data: u } = await supabase.auth.getUser();
         if (!u.user) return;
         const content = partsToText(message.parts);
-        await supabase.from("messages").insert({
-          id: message.id,
+        await insertMessageSafe(supabase, {
+          id: crypto.randomUUID(),       // DB row id — independent of the AI SDK's stream id
           conversation_id: threadId,
           user_id: u.user.id,
           role: "assistant",
           content,
           parts: message.parts as never,
-        });
+              });
 
         // Execute approved tools client-side (browser-side modules).
         for (const part of message.parts) {
@@ -187,6 +188,13 @@ function ChatThread() {
     });
   }, [messages.length, status]);
 
+  useEffect(() => {
+  flushMessageQueue(supabase);
+  const onOnline = () => flushMessageQueue(supabase);
+  window.addEventListener("online", onOnline);
+  return () => window.removeEventListener("online", onOnline);
+}, []);
+
   const isLoading = status === "submitted" || status === "streaming";
 
   async function onSubmit(e: React.FormEvent) {
@@ -201,15 +209,14 @@ function ChatThread() {
 
       // Persist user message before streaming so the row survives reloads.
       const userMsgId = crypto.randomUUID();
-      await supabase.from("messages").insert({
-        id: userMsgId,
-        conversation_id: threadId,
-        user_id: u.user.id,
-        role: "user",
-        content: text,
-        parts: [{ type: "text", text }] as never,
-      });
-
+      await insertMessageSafe(supabase, {
+       id: userMsgId,
+       conversation_id: threadId,
+       user_id: u.user.id,
+       role: "user",
+       content: text,
+       parts: [{ type: "text", text }] as never,
+        });
       const isFirst = (messages?.length ?? 0) === 0;
       if (isFirst) {
         await supabase
