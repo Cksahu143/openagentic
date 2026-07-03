@@ -11,7 +11,7 @@
       <div class="logo"></div>
       <div>
         <h1>OpenAgent</h1>
-        <p class="tag">Phase 1 · single-step PRPAVL</p>
+        <p class="tag">Phase 1 · PRPAVL loop · experience-accelerated</p>
       </div>
     </div>
     <details class="settings">
@@ -23,17 +23,34 @@
         <input id="model" type="text" placeholder="claude-sonnet-4-5" />
       </label>
       <label class="row"><input id="cursor-visible" type="checkbox" checked /> Show AI cursor</label>
-      <button id="save-settings">Save</button>
+      <label class="row"><input id="debug-metrics" type="checkbox" /> Debug metrics</label>
+      <div class="controls">
+        <button id="save-settings">Save</button>
+        <button id="clear-experience" class="danger">Clear experience memory</button>
+      </div>
     </details>
   </header>
 
   <section class="composer">
-    <textarea id="goal" placeholder="Type a task, e.g. &quot;search for openagent and click the first result&quot;"></textarea>
+    <textarea id="goal" placeholder="Type a task, e.g. &quot;open youtube, search openagent, play the first result&quot;"></textarea>
     <div class="controls">
       <button id="start" class="primary">Start</button>
       <button id="pause">Pause</button>
       <button id="resume">Resume</button>
       <button id="cancel" class="danger">Cancel</button>
+    </div>
+  </section>
+
+  <section class="status">
+    <div class="grid">
+      <div><span class="k">Goal</span><span id="s-goal">—</span></div>
+      <div><span class="k">Prediction</span><span id="s-pred">—</span></div>
+      <div><span class="k">Action</span><span id="s-action">—</span></div>
+      <div><span class="k">Experience</span><span id="s-exp">—</span></div>
+      <div><span class="k">Confidence</span><span id="s-conf">—</span></div>
+      <div><span class="k">Verification</span><span id="s-verify">—</span></div>
+      <div><span class="k">Recovery</span><span id="s-recover">—</span></div>
+      <div><span class="k">Cursor</span><span id="s-cursor">idle</span></div>
     </div>
   </section>
 
@@ -47,12 +64,12 @@
   </section>
 
   <section class="timeline">
-    <div class="section-title">Timeline</div>
+    <div class="section-title">Execution timeline</div>
     <ol id="timeline"></ol>
   </section>
 
-  <section class="metrics">
-    <div class="section-title">Latency (p95)</div>
+  <section class="metrics" id="metrics-panel">
+    <div class="section-title">Performance metrics</div>
     <div id="metrics">—</div>
   </section>
 
