@@ -9,6 +9,7 @@
 //   - Debounce mutation observations (~75ms) but also snapshot on demand.
 
 import { publish } from "../shared/event-bus.js";
+import { bumpMutation, getFreshSnapshot, putSnapshot, rememberSelector } from "./cache.js";
 
 const REF_ATTR = "data-oa-ref";
 let refCounter = 0;
@@ -81,7 +82,11 @@ function role(el) {
   return t.toLowerCase();
 }
 
-export function snapshot({ full = false } = {}) {
+export function snapshot({ full = false, force = false } = {}) {
+  if (!force) {
+    const fresh = getFreshSnapshot();
+    if (fresh && !full) return fresh;
+  }
   const t0 = performance.now();
   const url = location.href;
   const title = document.title;
@@ -129,15 +134,18 @@ export function snapshot({ full = false } = {}) {
     at: Date.now(),
   };
   lastSnapshotAt = snap.at;
+  putSnapshot(snap);
+  for (const e of items) if (e.name) rememberSelector(e.name, e.ref);
   return snap;
 }
 
 let debounceTimer = null;
 export function startObserver() {
   const mo = new MutationObserver(() => {
+    bumpMutation();
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      const s = snapshot();
+      const s = snapshot({ force: true });
       publish("perception.snapshot.ready", s);
     }, 75);
   });
