@@ -9,6 +9,7 @@
 //   - Debounce mutation observations (~75ms) but also snapshot on demand.
 
 import { publish } from "../shared/event-bus.js";
+import { bumpMutation, getFreshSnapshot, putSnapshot, rememberSelector } from "./cache.js";
 
 const REF_ATTR = "data-oa-ref";
 let refCounter = 0;
