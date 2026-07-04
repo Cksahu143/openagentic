@@ -67,6 +67,33 @@ function queueLocally(msg: MessagePayload) {
 }
 
 /**
+ * Sanitize an insert payload against the exact columns of `messages`. Anything
+ * else is stripped so PostgREST does not 400 on an unknown column, and `parts`
+ * is JSON-roundtripped to remove non-serializable values that AI SDK parts can
+ * carry (functions, undefined, BigInt, Symbol, etc.).
+ */
+function sanitizePayload(msg: MessagePayload): MessagePayload {
+  let parts: unknown = msg.parts;
+  if (parts !== undefined) {
+    try {
+      parts = JSON.parse(JSON.stringify(parts));
+    } catch {
+      parts = null;
+    }
+  }
+  const clean: MessagePayload = {
+    id: msg.id,
+    conversation_id: msg.conversation_id,
+    user_id: msg.user_id,
+    role: msg.role,
+    content: typeof msg.content === "string" ? msg.content : msg.content ?? "",
+    parts,
+  };
+  if (msg.created_at) clean.created_at = msg.created_at;
+  return clean;
+}
+
+/**
  * Insert a message. NEVER throws. Validates first, retries transient
  * failures with backoff, and falls back to a local queue on permanent
  * failure so the chat flow is never interrupted by a persistence error.
@@ -76,10 +103,11 @@ export async function insertMessageSafe(
   msg: MessagePayload,
   opts?: { maxRetries?: number },
 ): Promise<WriteResult> {
-  const { valid, errors } = validateMessagePayload(msg);
+  const payload = sanitizePayload(msg);
+  const { valid, errors } = validateMessagePayload(payload);
   if (!valid) {
-    console.error("[client-message-queue] validation failed, not sending:", errors, msg);
-    queueLocally(msg);
+    console.error("[client-message-queue] validation failed, not sending:", errors, payload);
+    queueLocally(payload);
     return { ok: false, reason: "validation_failed", detail: errors, queued: true };
   }
 
