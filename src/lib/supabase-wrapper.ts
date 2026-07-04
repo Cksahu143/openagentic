@@ -139,12 +139,13 @@ export class SupabaseWrapper {
     let lastError: any = null;
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const { data, error, status } = await this.supabase
+        const res = await (this.supabase
           .from(this.tableName)
           .insert(arr)
-          .select('id,created_at')
+          .select('id,created_at') as unknown as Promise<{ data: unknown; error: unknown; status: number }>)
           .then((r) => r)
-          .catch((err) => ({ data: null, error: err, status: 0 }));
+          .catch((err: unknown) => ({ data: null, error: err, status: 0 }));
+        const { data, error, status } = res as { data: unknown; error: { status?: number; message?: string } | null; status: number };
 
         if (!error) {
           return { ok: true, status: status ?? 201, details: data };

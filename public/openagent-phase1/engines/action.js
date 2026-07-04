@@ -170,8 +170,43 @@ export async function execute(command) {
         await realType(el, command.text || "", corr, { replace: command.replace !== false, paste: !!command.paste });
         break;
       case "paste":
-        await realType(el, command.text || "", corr, { replace: !!command.replace, paste: true });
+        // If `text` is provided, paste that. Otherwise read the OS clipboard.
+        {
+          let text = command.text;
+          if (typeof text !== "string") {
+            try { text = await navigator.clipboard.readText(); }
+            catch (err) { throw new Error(`clipboard read failed: ${err?.message || err}`); }
+          }
+          await realType(el, text || "", corr, { replace: !!command.replace, paste: true });
+          publish("action.clipboard.paste", { ref: command.ref, length: (text || "").length }, corr);
+        }
         break;
+      case "copy":
+      case "cut": {
+        // Select target range then use execCommand so the browser writes the
+        // system clipboard (works in content-script contexts without gesture).
+        const isField = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
+        let text = "";
+        if (isField) {
+          el.focus();
+          const start = el.selectionStart ?? 0;
+          const end = el.selectionEnd ?? el.value.length;
+          if (start === end) el.select();
+          text = el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? el.value.length);
+        } else {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          text = String(sel);
+        }
+        const okExec = document.execCommand(command.type); // "copy" | "cut"
+        // Belt-and-suspenders: also push through navigator.clipboard when available.
+        try { await navigator.clipboard.writeText(text); } catch { /* non-fatal */ }
+        publish(`action.clipboard.${command.type}`, { ref: command.ref, length: text.length, execOk: okExec }, corr);
+        break;
+      }
       case "clear":
         await realClear(el, corr);
         break;

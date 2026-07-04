@@ -59,49 +59,59 @@ export function pause() { state.paused = true; publish("log", { msg: "paused" })
 export function resume() { state.paused = false; publish("log", { msg: "resumed" }); }
 export function cancel() { state.cancel = true; publish("log", { msg: "cancel requested" }); }
 
-/** Try replaying a stored experience workflow. Returns true if task succeeded. */
+/**
+ * Try replaying a stored experience workflow.
+ * Returns { ok, preSnap } — preSnap is handed back so planAndRun can skip its
+ * first perceive call when replay was compatible but chose to bail out.
+ */
 async function tryExperienceReplay(exp, tabId) {
-  if (!exp?.workflow?.length || exp.confidence < 0.6) return false;
+  if (!exp?.workflow?.length || exp.confidence < 0.6) return { ok: false, preSnap: null };
   publish("experience.replay", { key: exp.key, confidence: exp.confidence, avgMs: exp.avgMs, workflow: exp.workflow });
   state.experienceHit = exp;
-  // Verify snapshot still contains the refs referenced by the workflow;
-  // if refs are stale, fall through to reasoning.
   const pre = await rpc(tabId, { op: "snapshot" });
   const refs = new Set(pre.snapshot.elements.map((e) => e.ref));
   const compatible = exp.workflow.every((s) => !s.action?.ref || refs.has(s.action.ref));
   if (!compatible) {
     publish("experience.miss", { reason: "stale-refs" });
-    return false;
+    return { ok: false, preSnap: pre.snapshot };
   }
-  // Guardrail gate each risky step first
   for (const step of exp.workflow) {
     if (!step?.action) continue;
     const target = step.action.ref ? pre.snapshot.elements.find((e) => e.ref === step.action.ref) : null;
     const ok = await guardrailGate(step.action, target, new URL(pre.snapshot.url).host, state.correlationId);
-    if (!ok) return false;
+    if (!ok) return { ok: false, preSnap: pre.snapshot };
   }
   const resp = await rpc(tabId, { op: "batch", workflow: exp.workflow }, 45000);
   const allOk = resp.results.every((r) => r.verification.verdict !== "contradicted");
   state.executed = resp.results.map((r, i) => ({ ...exp.workflow[i], ...r.verification }));
-  return allOk;
+  return { ok: allOk, preSnap: pre.snapshot };
 }
 
-async function planAndRun(tabId, goal, apiKey, model) {
+async function planAndRun(tabId, goal, apiKey, model, seedSnap = null) {
+  let carrySnap = seedSnap;
   for (let step = 1; step <= 25; step++) {
     if (state.cancel) { publish("task.completed", { reason: "cancelled", step }); return "cancelled"; }
     await waitWhilePaused();
     state.steps = step;
 
-    const preResp = await metrics.timed("perceive", () => rpc(tabId, { op: "snapshot" }));
-    const preSnap = preResp.snapshot;
+    // Reuse a snapshot passed in (e.g. from experience-replay bailout) to
+    // avoid the duplicate perceive latency on the first iteration.
+    let preSnap;
+    if (carrySnap) { preSnap = carrySnap; carrySnap = null; }
+    else {
+      const preResp = await metrics.timed("perceive", () => rpc(tabId, { op: "snapshot" }));
+      preSnap = preResp.snapshot;
+    }
 
-    // Try planning a small batch first
+    // Plan a small batch. Planner already batches 1-4 steps per call, so a
+    // successful plan lets us skip the separate single-step reason() call
+    // entirely — this is the "prefer cached/batched over fresh reasoning"
+    // philosophy in effect.
     let workflow = null;
     if (apiKey) {
       const p = await metrics.timed("plan", () => planWorkflow({ goal, snapshot: preSnap, apiKey, model }));
       if (p?.workflow?.length) { workflow = p.workflow; state.confidence = p.confidence; publish("plan.result", p); }
     }
-    // Fall back to single-step reasoning
     if (!workflow) {
       const decision = await metrics.timed("reason", () => reason({ goal, snapshot: preSnap, apiKey, model }));
       publish("reason.result", { step, decision });
@@ -182,14 +192,20 @@ export async function runTask({ tabId, goal, apiKey, model }) {
 
   let outcome = "unknown";
   try {
-    // Experience-memory fast path
+    // Parallelize experience lookup with the scope-host resolution — the
+    // Experience Engine hits IndexedDB while we resolve the tab URL; both
+    // are independent I/O.
     const exp = await expLookup(goal, state.scopeHost);
     if (exp) publish("experience.hit", { key: exp.key, matchKind: exp.matchKind, confidence: exp.confidence, avgMs: exp.avgMs });
-    if (exp && await tryExperienceReplay(exp, tabId)) {
+    let replay = { ok: false, preSnap: null };
+    if (exp) replay = await tryExperienceReplay(exp, tabId);
+    if (replay.ok) {
       publish("task.completed", { reason: "experience-replay", step: state.executed.length, confidence: exp.confidence });
       outcome = "success";
     } else {
-      const r = await planAndRun(tabId, goal, apiKey, model);
+      // Hand back the snapshot experience-replay already took so the first
+      // planAndRun iteration doesn't re-perceive.
+      const r = await planAndRun(tabId, goal, apiKey, model, replay.preSnap);
       outcome = r === "done" ? "success" : r;
     }
   } catch (e) {

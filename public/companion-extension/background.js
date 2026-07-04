@@ -662,6 +662,119 @@ async function screenshot({ tabId, quality = 60 }) {
   }
 }
 
+// ---------------- Clipboard (copy / cut / paste) ----------------
+// Every action returns a verification-ready result: { ok, verified, before?,
+// after?, clipboard? } so the Action Engine can confirm the outcome without a
+// second observation.
+
+function pageCopy(sel) {
+  const el = sel ? (document.querySelector(`[data-oa-ref="${sel.ref}"]`) || document.querySelector(sel.selector)) : null;
+  let text = "";
+  if (el) {
+    if ("value" in el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+      const start = el.selectionStart ?? 0;
+      const end = el.selectionEnd ?? el.value.length;
+      text = start === end ? el.value : el.value.slice(start, end);
+    } else {
+      const s = window.getSelection();
+      text = s && !s.isCollapsed && el.contains(s.anchorNode) ? s.toString() : (el.textContent || "");
+    }
+  } else {
+    text = String(window.getSelection() || "");
+  }
+  return { ok: true, text };
+}
+
+function pageCut(sel) {
+  const res = pageCopy(sel);
+  const el = sel ? (document.querySelector(`[data-oa-ref="${sel.ref}"]`) || document.querySelector(sel.selector)) : null;
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) {
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? el.value.length;
+    const before = el.value;
+    const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    const nextVal = start === end ? "" : before.slice(0, start) + before.slice(end);
+    if (setter) setter.call(el, nextVal); else el.value = nextVal;
+    el.dispatchEvent(new InputEvent("input", { inputType: "deleteByCut", bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, text: res.text, before, after: nextVal, verified: before !== nextVal };
+  }
+  return { ok: true, text: res.text, verified: true };
+}
+
+function pagePaste(sel, text) {
+  const el = sel ? (document.querySelector(`[data-oa-ref="${sel.ref}"]`) || document.querySelector(sel.selector)) : document.activeElement;
+  if (!el) return { ok: false, error: "no target element" };
+  el.focus();
+  const before = "value" in el ? el.value : (el.textContent || "");
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") {
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const nextVal = el.value.slice(0, start) + text + el.value.slice(end);
+    const proto = el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (setter) setter.call(el, nextVal); else el.value = nextVal;
+    el.dispatchEvent(new InputEvent("input", { data: text, inputType: "insertFromPaste", bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    return { ok: true, before, after: nextVal, verified: nextVal.includes(text) };
+  }
+  if (el.isContentEditable) {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", text);
+    el.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
+    document.execCommand("insertText", false, text);
+    const after = el.textContent || "";
+    return { ok: true, before, after, verified: after.includes(text) };
+  }
+  return { ok: false, error: "target is not editable" };
+}
+
+// Service-worker-side clipboard bridge — the SW has access to
+// navigator.clipboard through the clipboardRead / clipboardWrite permissions.
+async function clipboardRead() {
+  try { return { ok: true, text: await self.navigator.clipboard.readText() }; }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+}
+async function clipboardWrite(text) {
+  try { await self.navigator.clipboard.writeText(String(text ?? "")); return { ok: true }; }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+}
+
+async function copyAction({ tabId, ref, selector }) {
+  const id = await getActiveTabId(tabId);
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId: id }, func: pageCopy, args: [ref || selector ? { ref, selector } : null],
+  });
+  const text = res?.result?.text ?? "";
+  const write = await clipboardWrite(text);
+  return { ok: !!res?.result?.ok && write.ok, tabId: id, text, verified: write.ok };
+}
+
+async function cutAction({ tabId, ref, selector }) {
+  const id = await getActiveTabId(tabId);
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId: id }, func: pageCut, args: [ref || selector ? { ref, selector } : null],
+  });
+  const text = res?.result?.text ?? "";
+  const write = await clipboardWrite(text);
+  return { ...(res?.result || { ok: false }), tabId: id, text, verified: write.ok && (res?.result?.verified ?? true) };
+}
+
+async function pasteAction({ tabId, ref, selector, text }) {
+  const id = await getActiveTabId(tabId);
+  let payload = text;
+  if (typeof payload !== "string") {
+    const rd = await clipboardRead();
+    if (!rd.ok) return { ok: false, tabId: id, error: rd.error || "clipboard read failed" };
+    payload = rd.text ?? "";
+  }
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId: id }, func: pagePaste, args: [ref || selector ? { ref, selector } : null, payload],
+  });
+  return { ...(res?.result || { ok: false }), tabId: id };
+}
+
 const HANDLERS = {
   list_tabs: listTabs,
   open_tab: openTab,
@@ -680,6 +793,11 @@ const HANDLERS = {
   wait_for: waitFor,
   release_tab: releaseTab,
   screenshot,
+  copy: copyAction,
+  cut: cutAction,
+  paste: pasteAction,
+  clipboard_read: async () => clipboardRead(),
+  clipboard_write: async ({ text }) => clipboardWrite(text),
   ping: async () => ({ pong: true, at: Date.now() }),
 };
 

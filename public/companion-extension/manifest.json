@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "OpenAgent Companion",
-  "version": "0.3.1",
-  "description": "Lets the OpenAgent web assistant open tabs, search, control forms, observe rich page structure, click reliably (scroll + occlusion-safe retry), and take fallback screenshots — with your explicit permission.",
+  "version": "0.3.2",
+  "description": "Lets the OpenAgent web assistant open tabs, search, control forms, observe rich page structure, click reliably (scroll + occlusion-safe retry), copy/cut/paste via the system clipboard, and take fallback screenshots — with your explicit permission.",
 
-  "permissions": ["tabs", "storage", "alarms", "scripting", "activeTab"],
+  "permissions": ["tabs", "storage", "alarms", "scripting", "activeTab", "clipboardRead", "clipboardWrite"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "action": { "default_popup": "popup.html", "default_title": "OpenAgent Companion" },
