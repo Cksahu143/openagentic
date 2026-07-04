@@ -145,7 +145,7 @@ export async function insertMessageSafe(
   }
 
   console.error("[client-message-queue] giving up, queueing locally for later flush", lastError);
-  queueLocally(msg);
+  queueLocally(payload);
   return { ok: false, reason: "send_failed", detail: lastError, queued: true };
 }
 
