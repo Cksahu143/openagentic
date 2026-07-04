@@ -87,22 +87,31 @@ async function tryExperienceReplay(exp, tabId) {
   return { ok: allOk, preSnap: pre.snapshot };
 }
 
-async function planAndRun(tabId, goal, apiKey, model) {
+async function planAndRun(tabId, goal, apiKey, model, seedSnap = null) {
+  let carrySnap = seedSnap;
   for (let step = 1; step <= 25; step++) {
     if (state.cancel) { publish("task.completed", { reason: "cancelled", step }); return "cancelled"; }
     await waitWhilePaused();
     state.steps = step;
 
-    const preResp = await metrics.timed("perceive", () => rpc(tabId, { op: "snapshot" }));
-    const preSnap = preResp.snapshot;
+    // Reuse a snapshot passed in (e.g. from experience-replay bailout) to
+    // avoid the duplicate perceive latency on the first iteration.
+    let preSnap;
+    if (carrySnap) { preSnap = carrySnap; carrySnap = null; }
+    else {
+      const preResp = await metrics.timed("perceive", () => rpc(tabId, { op: "snapshot" }));
+      preSnap = preResp.snapshot;
+    }
 
-    // Try planning a small batch first
+    // Plan a small batch. Planner already batches 1-4 steps per call, so a
+    // successful plan lets us skip the separate single-step reason() call
+    // entirely — this is the "prefer cached/batched over fresh reasoning"
+    // philosophy in effect.
     let workflow = null;
     if (apiKey) {
       const p = await metrics.timed("plan", () => planWorkflow({ goal, snapshot: preSnap, apiKey, model }));
       if (p?.workflow?.length) { workflow = p.workflow; state.confidence = p.confidence; publish("plan.result", p); }
     }
-    // Fall back to single-step reasoning
     if (!workflow) {
       const decision = await metrics.timed("reason", () => reason({ goal, snapshot: preSnap, apiKey, model }));
       publish("reason.result", { step, decision });
