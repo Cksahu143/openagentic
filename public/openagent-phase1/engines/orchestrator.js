@@ -59,31 +59,32 @@ export function pause() { state.paused = true; publish("log", { msg: "paused" })
 export function resume() { state.paused = false; publish("log", { msg: "resumed" }); }
 export function cancel() { state.cancel = true; publish("log", { msg: "cancel requested" }); }
 
-/** Try replaying a stored experience workflow. Returns true if task succeeded. */
+/**
+ * Try replaying a stored experience workflow.
+ * Returns { ok, preSnap } — preSnap is handed back so planAndRun can skip its
+ * first perceive call when replay was compatible but chose to bail out.
+ */
 async function tryExperienceReplay(exp, tabId) {
-  if (!exp?.workflow?.length || exp.confidence < 0.6) return false;
+  if (!exp?.workflow?.length || exp.confidence < 0.6) return { ok: false, preSnap: null };
   publish("experience.replay", { key: exp.key, confidence: exp.confidence, avgMs: exp.avgMs, workflow: exp.workflow });
   state.experienceHit = exp;
-  // Verify snapshot still contains the refs referenced by the workflow;
-  // if refs are stale, fall through to reasoning.
   const pre = await rpc(tabId, { op: "snapshot" });
   const refs = new Set(pre.snapshot.elements.map((e) => e.ref));
   const compatible = exp.workflow.every((s) => !s.action?.ref || refs.has(s.action.ref));
   if (!compatible) {
     publish("experience.miss", { reason: "stale-refs" });
-    return false;
+    return { ok: false, preSnap: pre.snapshot };
   }
-  // Guardrail gate each risky step first
   for (const step of exp.workflow) {
     if (!step?.action) continue;
     const target = step.action.ref ? pre.snapshot.elements.find((e) => e.ref === step.action.ref) : null;
     const ok = await guardrailGate(step.action, target, new URL(pre.snapshot.url).host, state.correlationId);
-    if (!ok) return false;
+    if (!ok) return { ok: false, preSnap: pre.snapshot };
   }
   const resp = await rpc(tabId, { op: "batch", workflow: exp.workflow }, 45000);
   const allOk = resp.results.every((r) => r.verification.verdict !== "contradicted");
   state.executed = resp.results.map((r, i) => ({ ...exp.workflow[i], ...r.verification }));
-  return allOk;
+  return { ok: allOk, preSnap: pre.snapshot };
 }
 
 async function planAndRun(tabId, goal, apiKey, model) {
