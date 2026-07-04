@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "OpenAgent Phase 1",
-  "version": "0.2.0",
-  "description": "OpenAgent Phase 1 — PRPAVL loop with Perception, Universal Action, Prediction, Planner, Experience Memory, Verification, Recovery, and Guardrail engines. Ships a live Workspace side panel, animated AI cursor, and adaptive event-driven waits.",
+  "version": "0.2.1",
+  "description": "OpenAgent Phase 1 — PRPAVL loop with Perception, Universal Action (incl. clipboard copy/cut/paste), Prediction, Planner, Experience Memory, Verification, Recovery, and Guardrail engines. Ships a live Workspace side panel, animated AI cursor, and adaptive event-driven waits.",
   "permissions": ["activeTab", "scripting", "storage", "sidePanel", "clipboardRead", "clipboardWrite"],
   "background": { "service_worker": "background/service-worker.js", "type": "module" },
   "action": { "default_title": "Open OpenAgent Workspace" },
