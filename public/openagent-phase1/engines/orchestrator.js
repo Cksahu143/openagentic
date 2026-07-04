@@ -192,14 +192,20 @@ export async function runTask({ tabId, goal, apiKey, model }) {
 
   let outcome = "unknown";
   try {
-    // Experience-memory fast path
+    // Parallelize experience lookup with the scope-host resolution — the
+    // Experience Engine hits IndexedDB while we resolve the tab URL; both
+    // are independent I/O.
     const exp = await expLookup(goal, state.scopeHost);
     if (exp) publish("experience.hit", { key: exp.key, matchKind: exp.matchKind, confidence: exp.confidence, avgMs: exp.avgMs });
-    if (exp && await tryExperienceReplay(exp, tabId)) {
+    let replay = { ok: false, preSnap: null };
+    if (exp) replay = await tryExperienceReplay(exp, tabId);
+    if (replay.ok) {
       publish("task.completed", { reason: "experience-replay", step: state.executed.length, confidence: exp.confidence });
       outcome = "success";
     } else {
-      const r = await planAndRun(tabId, goal, apiKey, model);
+      // Hand back the snapshot experience-replay already took so the first
+      // planAndRun iteration doesn't re-perceive.
+      const r = await planAndRun(tabId, goal, apiKey, model, replay.preSnap);
       outcome = r === "done" ? "success" : r;
     }
   } catch (e) {
