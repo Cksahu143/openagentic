@@ -125,14 +125,21 @@ function ChatThread() {
         const { data: u } = await supabase.auth.getUser();
         if (!u.user) return;
         const content = partsToText(message.parts);
-        await insertMessageSafe(supabase, {
+        const res = await insertMessageSafe(supabase, {
           id: crypto.randomUUID(),       // DB row id — independent of the AI SDK's stream id
           conversation_id: threadId,
           user_id: u.user.id,
           role: "assistant",
           content,
           parts: message.parts as never,
-              });
+        });
+        if (!res.ok) {
+          toast.error(
+            res.queued
+              ? "Reply saved locally — will retry when the connection recovers."
+              : "Could not save assistant reply.",
+          );
+        }
 
         // Execute approved tools client-side (browser-side modules).
         for (const part of message.parts) {
