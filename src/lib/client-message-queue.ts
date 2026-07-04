@@ -115,7 +115,7 @@ export async function insertMessageSafe(
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const { error } = await client.from("messages").insert(msg);
+    const { error } = await client.from("messages").insert(payload);
     if (!error) return { ok: true };
 
     lastError = error;
