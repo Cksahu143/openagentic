@@ -216,7 +216,7 @@ function ChatThread() {
 
       // Persist user message before streaming so the row survives reloads.
       const userMsgId = crypto.randomUUID();
-      await insertMessageSafe(supabase, {
+      const res = await insertMessageSafe(supabase, {
        id: userMsgId,
        conversation_id: threadId,
        user_id: u.user.id,
@@ -224,6 +224,9 @@ function ChatThread() {
        content: text,
        parts: [{ type: "text", text }] as never,
         });
+      if (!res.ok && !res.queued) {
+        toast.error("Could not save your message. Retrying in the background.");
+      }
       const isFirst = (messages?.length ?? 0) === 0;
       if (isFirst) {
         await supabase
