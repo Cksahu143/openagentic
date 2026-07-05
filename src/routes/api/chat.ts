@@ -317,12 +317,19 @@ const model = gateway("gemini-2.5-flash"); // free-tier eligible — confirm cur
             },
           });
 
-        const result = streamText({
-         model,
-         system: SYSTEM_PROMPT,
-         messages: await convertToModelMessages(body.messages as UIMessage[]),
-         stopWhen: stepCountIs(60),
-          tools: {
+        // new
+const result = streamText({
+ model,
+ system: SYSTEM_PROMPT,
+ messages: await convertToModelMessages(body.messages as UIMessage[]),
+ stopWhen: stepCountIs(20), // free-tier RPM can't sustain 60 steps per task
+ maxRetries: 3, // built-in retry for transient errors, including 429s
+ prepareStep: async ({ stepNumber }) => {
+   // Keep step rate under ~14/min so we don't immediately re-hit the cap.
+   if (stepNumber > 0) await new Promise((r) => setTimeout(r, 4300));
+   return {};
+ },
+  tools: {
             plan_session: tool({
               description:
                 "FIRST STEP for any multi-step browser goal. Create a live task tree of ordered steps. Steps appear in the user's Workspace immediately.",
