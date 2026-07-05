@@ -717,3 +717,7 @@ return result.toUIMessageStreamResponse({
     return `AI error: ${raw}`;
   },
 });
+        },
+    },
+  },
+});
