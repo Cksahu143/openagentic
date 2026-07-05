@@ -113,12 +113,15 @@ globalThis.window = { getSelection: () => ({
 Object.defineProperty(window, Symbol.toPrimitive, { value: () => "" });
 
 let clipboardWrites = 0;
-globalThis.navigator = {
-  clipboard: {
-    writeText: async (t) => { osClipboard = t; clipboardWrites++; },
-    readText: async () => osClipboard,
+Object.defineProperty(globalThis, "navigator", {
+  configurable: true,
+  value: {
+    clipboard: {
+      writeText: async (t) => { osClipboard = t; clipboardWrites++; },
+      readText: async () => osClipboard,
+    },
   },
-};
+});
 
 globalThis.location = { href: "http://test/local" };
 
