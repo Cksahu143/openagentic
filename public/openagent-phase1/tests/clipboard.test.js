@@ -38,18 +38,6 @@ globalThis.KeyboardEvent = class extends FakeEvent {};
 globalThis.InputEvent = class extends FakeEvent {};
 globalThis.ClipboardEvent = class extends FakeEvent {};
 
-// The Action Engine uses HTMLInputElement/HTMLTextAreaElement prototypes to
-// find the native `value` setter. Provide a minimal shim that just writes to
-// the underlying object's own property.
-const nativeValueDesc = {
-  set(v) { this._value = v; },
-  get() { return this._value ?? ""; },
-  configurable: true,
-};
-globalThis.HTMLInputElement = function () {};
-Object.defineProperty(globalThis.HTMLInputElement.prototype, "value", nativeValueDesc);
-globalThis.HTMLTextAreaElement = function () {};
-Object.defineProperty(globalThis.HTMLTextAreaElement.prototype, "value", nativeValueDesc);
 class FakeDT {
   constructor() { this._m = new Map(); }
   setData(t, v) { this._m.set(t, v); }
