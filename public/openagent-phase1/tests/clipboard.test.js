@@ -104,13 +104,16 @@ globalThis.document = {
   },
   createRange: () => ({ selectNodeContents() {} }),
   execCommand: (cmd) => {
-    if (cmd === "copy") { osClipboard = selectedText; return true; }
+    const el = activeElement;
+    if (!el) return false;
+    const s = el.selectionStart ?? 0;
+    const e = el.selectionEnd ?? (el.value || "").length;
+    const slice = (el.value || "").slice(s, e);
+    if (cmd === "copy") { osClipboard = slice; return true; }
     if (cmd === "cut") {
-      osClipboard = selectedText;
-      if (inputField.value === selectedText) {
-        inputField.value = "";
-        inputField.selectionStart = inputField.selectionEnd = 0;
-      }
+      osClipboard = slice;
+      el.value = (el.value || "").slice(0, s) + (el.value || "").slice(e);
+      el.selectionStart = el.selectionEnd = s;
       return true;
     }
     return false;
