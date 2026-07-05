@@ -59,21 +59,40 @@ globalThis.DataTransfer = FakeDT;
 
 // ---- fake DOM element ---------------------------------------------------
 
+// The Action Engine uses HTMLInputElement/HTMLTextAreaElement prototypes to
+// find the native `value` setter. Provide a minimal shim that stores writes
+// on a private slot so the reader (`el.value`) picks them up.
+const nativeValueDesc = {
+  set(v) {
+    Object.defineProperty(this, "_ov", { value: v, writable: true, configurable: true });
+  },
+  get() { return this._ov ?? ""; },
+  configurable: true,
+};
+globalThis.HTMLInputElement = function () {};
+Object.defineProperty(globalThis.HTMLInputElement.prototype, "value", nativeValueDesc);
+globalThis.HTMLTextAreaElement = function () {};
+Object.defineProperty(globalThis.HTMLTextAreaElement.prototype, "value", nativeValueDesc);
+
+// ---- fake DOM element ---------------------------------------------------
+
 function makeField({ tagName = "INPUT", type = "text", value = "" } = {}) {
   const listeners = new Map();
-  return {
-    tagName, type, value,
+  const field = Object.create(globalThis.HTMLInputElement.prototype);
+  Object.assign(field, {
+    tagName, type,
+    _ov: value,
     isContentEditable: false,
     selectionStart: 0, selectionEnd: value.length,
     getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 30 }),
     scrollIntoView() {},
-    focus() { activeElement = this; },
-    select() { this.selectionStart = 0; this.selectionEnd = (this.value || "").length; },
+    focus() { activeElement = field; },
+    select() { field.selectionStart = 0; field.selectionEnd = (field.value || "").length; },
     getAttribute() { return null; },
     closest() { return null; },
     dispatchEvent(ev) {
       const arr = listeners.get(ev.type);
-      if (arr) for (const fn of arr) fn.call(this, ev);
+      if (arr) for (const fn of arr) fn.call(field, ev);
       return true;
     },
     addEventListener(t, fn) {
@@ -81,7 +100,8 @@ function makeField({ tagName = "INPUT", type = "text", value = "" } = {}) {
       listeners.get(t).push(fn);
     },
     removeEventListener() {},
-  };
+  });
+  return field;
 }
 
 // ---- fake document / OS clipboard --------------------------------------
