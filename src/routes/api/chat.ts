@@ -8,13 +8,23 @@ import {
 } from "ai";
 import { z } from "zod";
 
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createGoogleProvider } from "@/lib/ai-gateway.server";
 import { fetchUrl } from "@/lib/browser-fetch.server";
 import { runJs } from "@/lib/code-runner.server";
 
 const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer-use assistant.
 
 You operate in a continuous OBSERVE → THINK → ACT → VERIFY loop with hybrid perception:
+
+EFFICIENCY (you are running on a rate-limited API tier):
+  - Every tool call and every model turn consumes quota shared across all
+    your sessions. Don't observe speculatively, don't screenshot "just in
+    case," and don't call ask_ai unless the task genuinely needs a second
+    model's judgment — it costs an additional request on the same quota.
+  - Prefer the FAST PATH below whenever conditions allow it. Fewer, more
+    decisive tool calls beat many small cautious ones.
+  - Plan generously up front (plan_session) so you don't need to re-plan
+    mid-task, which costs extra turns.
 
 OBSERVATION PRIORITY (always in this order):
   1. companion_observe   — structured DOM + accessibility + page state (PRIMARY)
@@ -85,7 +95,8 @@ SESSION TOOLS (ALWAYS for multi-step goals — the Workspace shows them live):
   - set_browser_memory({ memory }) — merge session memory
   - complete_session({ summary })
 
-SERVER TOOLS: fetch_url, run_code, ask_ai.
+SERVER TOOLS: fetch_url, run_code, ask_ai (ask_ai calls a second model —
+  use only when genuinely needed, not as a default reasoning aid).
 CLIENT-APPLIED: save_memory, create_task, write_file.
 
 COMPANION BROWSER (real Chrome control):
@@ -104,6 +115,17 @@ RULES:
 - If a companion tool errors with "No companion device", tell the user to
   install & pair the extension (Devices page) and STOP.
 - Report progress in short markdown updates as you go.
+
+STOPPING CONDITIONS — always end a session in one of these states, never
+leave it hanging:
+  - Goal fully achieved → complete_session with a summary.
+  - A step is capped (record_recovery returned capped:true) → update_step
+    status:"failed" with a clear note, then either move to a different
+    step, ask the user a direct question, or complete_session with the
+    partial result. Do not keep retrying past the cap.
+  - The AI provider itself errors (rate limit, quota, auth) — this is not
+    something you can fix by retrying the same request. Stop cleanly;
+    the server surfaces this to the user directly.
 
 FAST PATH (high-speed execution) — for simple, high-confidence actions
 (clicking a labelled button you just observed, typing into a labelled
@@ -145,12 +167,13 @@ export const Route = createFileRoute("/api/chat")({
           return new Response("messages required", { status: 400 });
         }
 
-        const key = process.env.LOVABLE_API_KEY;
-        if (!key) return new Response("Missing LOVABLE_API_KEY", { status: 500 });
+        
+const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+if (!key) return new Response("Missing GOOGLE_GENERATIVE_AI_API_KEY", { status: 500 });
 
-        const userId = await getUserIdFromRequest(request);
-        const gateway = createLovableAiGatewayProvider(key);
-        const model = gateway("google/gemini-3-flash-preview");
+const userId = await getUserIdFromRequest(request);
+const gateway = createGoogleProvider(key);
+const model = gateway("gemini-2.5-flash"); // free-tier eligible — confirm current name at ai.google.dev/gemini-api/docs/models
 
         const { callCompanion } = await import("@/lib/companion.server");
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -295,10 +318,10 @@ export const Route = createFileRoute("/api/chat")({
           });
 
         const result = streamText({
-          model,
-          system: SYSTEM_PROMPT,
-          messages: await convertToModelMessages(body.messages as UIMessage[]),
-          stopWhen: stepCountIs(60),
+         model,
+         system: SYSTEM_PROMPT,
+         messages: await convertToModelMessages(body.messages as UIMessage[]),
+         stopWhen: stepCountIs(60),
           tools: {
             plan_session: tool({
               description:
@@ -489,7 +512,7 @@ export const Route = createFileRoute("/api/chat")({
               }),
               execute: async ({ prompt, system, model: modelId }) => {
                 try {
-                  const subModel = gateway(modelId || "google/gemini-3-flash-preview");
+                  const subModel = gateway(modelId || "gemini-2.5-flash");
                   const sub = await streamText({ model: subModel, system, prompt });
                   let text = "";
                   for await (const chunk of sub.textStream) text += chunk;
@@ -675,25 +698,22 @@ export const Route = createFileRoute("/api/chat")({
           },
         });
 
-        return result.toUIMessageStreamResponse({
-          originalMessages: body.messages as UIMessage[],
-          onError: (error) => {
-            const raw = error instanceof Error ? error.message : String(error);
-            console.error("[/api/chat] stream error:", raw, error);
-            // Friendlier surface for common failures.
-            if (/payment required|not enough credits|402/i.test(raw)) {
-              return "⚠️ Lovable AI credits are exhausted for this workspace. Add credits in Cloud → AI Gateway, then retry.";
-            }
-            if (/unauthorized|401/i.test(raw)) {
-              return "⚠️ Lovable AI Gateway unauthorized. Check the LOVABLE_API_KEY secret.";
-            }
-            if (/rate limit|429/i.test(raw)) {
-              return "⚠️ Rate limited by the AI gateway. Wait a few seconds and retry.";
-            }
-            return `AI error: ${raw}`;
-          },
-        });
-      },
-    },
+        // new
+return result.toUIMessageStreamResponse({
+  originalMessages: body.messages as UIMessage[],
+  onError: (error) => {
+    const raw = error instanceof Error ? error.message : String(error);
+    console.error("[/api/chat] stream error:", raw, error);
+    // Friendlier surface for common Gemini/Google AI Studio failures.
+    if (/resource_exhausted|quota|429/i.test(raw)) {
+      return "⚠️ Gemini free-tier rate limit hit. Wait a minute and retry — free-tier quota resets per minute/day, not per request.";
+    }
+    if (/api key not valid|permission_denied|401|403/i.test(raw)) {
+      return "⚠️ Gemini API key rejected. Check the GOOGLE_GENERATIVE_AI_API_KEY secret is set and current.";
+    }
+    if (/503|unavailable|overloaded/i.test(raw)) {
+      return "⚠️ Gemini is temporarily overloaded on Google's side. Retry in a moment.";
+    }
+    return `AI error: ${raw}`;
   },
 });
