@@ -82,10 +82,22 @@ const refs = { "src": inputField, "dst": targetField };
 let osClipboard = "";
 let selectedText = "";
 
+function makeContainer() {
+  return {
+    style: {}, setAttribute() {}, getAttribute() { return null; },
+    appendChild() {}, removeChild() {}, remove() {},
+    addEventListener() {}, removeEventListener() {},
+    querySelector() { return { style: {} }; },
+    innerHTML: "",
+  };
+}
+
 globalThis.document = {
-  documentElement: { outerHTML: "<html></html>" },
+  documentElement: { outerHTML: "<html></html>", appendChild() {}, setAttribute() {} },
+  head: { appendChild() {} },
   activeElement: null,
   body: { addEventListener() {}, removeEventListener() {}, dispatchEvent() {} },
+  createElement: () => makeContainer(),
   querySelector: (sel) => {
     const m = /data-oa-ref="([^"]+)"/.exec(sel);
     return m ? refs[m[1]] ?? null : null;
@@ -95,7 +107,6 @@ globalThis.document = {
     if (cmd === "copy") { osClipboard = selectedText; return true; }
     if (cmd === "cut") {
       osClipboard = selectedText;
-      // Emulate the browser removing the selected range from the field.
       if (inputField.value === selectedText) {
         inputField.value = "";
         inputField.selectionStart = inputField.selectionEnd = 0;
@@ -104,6 +115,10 @@ globalThis.document = {
     }
     return false;
   },
+};
+globalThis.chrome = {
+  runtime: { getURL: (p) => `chrome-ext://test/${p}` },
+  storage: { local: { get: (_k, cb) => cb({}), set() {} } },
 };
 globalThis.window = { getSelection: () => ({
   removeAllRanges() { selectedText = ""; },
