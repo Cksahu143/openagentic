@@ -677,6 +677,11 @@ export const Route = createFileRoute("/api/chat")({
 
         return result.toUIMessageStreamResponse({
           originalMessages: body.messages as UIMessage[],
+          onError: (error) => {
+            const msg = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+            console.error("[/api/chat] stream error:", msg, error);
+            return msg;
+          },
         });
       },
     },
