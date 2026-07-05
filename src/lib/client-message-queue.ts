@@ -1,4 +1,4 @@
-// src/lib/client-message-queue.ts
+// new file — src/lib/client-message-queue.ts
 // Browser-safe, non-throwing message persistence with validation,
 // retry+backoff, and localStorage-backed offline queueing.
 
@@ -67,33 +67,6 @@ function queueLocally(msg: MessagePayload) {
 }
 
 /**
- * Sanitize an insert payload against the exact columns of `messages`. Anything
- * else is stripped so PostgREST does not 400 on an unknown column, and `parts`
- * is JSON-roundtripped to remove non-serializable values that AI SDK parts can
- * carry (functions, undefined, BigInt, Symbol, etc.).
- */
-function sanitizePayload(msg: MessagePayload): MessagePayload {
-  let parts: unknown = msg.parts;
-  if (parts !== undefined) {
-    try {
-      parts = JSON.parse(JSON.stringify(parts));
-    } catch {
-      parts = null;
-    }
-  }
-  const clean: MessagePayload = {
-    id: msg.id,
-    conversation_id: msg.conversation_id,
-    user_id: msg.user_id,
-    role: msg.role,
-    content: typeof msg.content === "string" ? msg.content : msg.content ?? "",
-    parts,
-  };
-  if (msg.created_at) clean.created_at = msg.created_at;
-  return clean;
-}
-
-/**
  * Insert a message. NEVER throws. Validates first, retries transient
  * failures with backoff, and falls back to a local queue on permanent
  * failure so the chat flow is never interrupted by a persistence error.
@@ -103,11 +76,10 @@ export async function insertMessageSafe(
   msg: MessagePayload,
   opts?: { maxRetries?: number },
 ): Promise<WriteResult> {
-  const payload = sanitizePayload(msg);
-  const { valid, errors } = validateMessagePayload(payload);
+  const { valid, errors } = validateMessagePayload(msg);
   if (!valid) {
-    console.error("[client-message-queue] validation failed, not sending:", errors, payload);
-    queueLocally(payload);
+    console.error("[client-message-queue] validation failed, not sending:", errors, msg);
+    queueLocally(msg);
     return { ok: false, reason: "validation_failed", detail: errors, queued: true };
   }
 
@@ -115,7 +87,7 @@ export async function insertMessageSafe(
   let lastError: unknown = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const { error } = await client.from("messages").insert(payload);
+    const { error } = await client.from("messages").insert(msg);
     if (!error) return { ok: true };
 
     lastError = error;
@@ -145,7 +117,7 @@ export async function insertMessageSafe(
   }
 
   console.error("[client-message-queue] giving up, queueing locally for later flush", lastError);
-  queueLocally(payload);
+  queueLocally(msg);
   return { ok: false, reason: "send_failed", detail: lastError, queued: true };
 }
 
