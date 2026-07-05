@@ -678,9 +678,19 @@ export const Route = createFileRoute("/api/chat")({
         return result.toUIMessageStreamResponse({
           originalMessages: body.messages as UIMessage[],
           onError: (error) => {
-            const msg = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-            console.error("[/api/chat] stream error:", msg, error);
-            return msg;
+            const raw = error instanceof Error ? error.message : String(error);
+            console.error("[/api/chat] stream error:", raw, error);
+            // Friendlier surface for common failures.
+            if (/payment required|not enough credits|402/i.test(raw)) {
+              return "⚠️ Lovable AI credits are exhausted for this workspace. Add credits in Cloud → AI Gateway, then retry.";
+            }
+            if (/unauthorized|401/i.test(raw)) {
+              return "⚠️ Lovable AI Gateway unauthorized. Check the LOVABLE_API_KEY secret.";
+            }
+            if (/rate limit|429/i.test(raw)) {
+              return "⚠️ Rate limited by the AI gateway. Wait a few seconds and retry.";
+            }
+            return `AI error: ${raw}`;
           },
         });
       },
