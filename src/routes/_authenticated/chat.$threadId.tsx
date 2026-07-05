@@ -196,11 +196,11 @@ function ChatThread() {
   }, [messages.length, status]);
 
   useEffect(() => {
-  flushMessageQueue(supabase);
-  const onOnline = () => flushMessageQueue(supabase);
-  window.addEventListener("online", onOnline);
-  return () => window.removeEventListener("online", onOnline);
-}, []);
+   flushMessageQueue(supabase);
+   const onOnline = () => flushMessageQueue(supabase);
+   window.addEventListener("online", onOnline);
+   return () => window.removeEventListener("online", onOnline);
+ }, []);
 
   const isLoading = status === "submitted" || status === "streaming";
 
