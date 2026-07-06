@@ -779,19 +779,17 @@ const result = streamText({
           },
         });
 
-        // new
+       // new — single, correctly-closed version
 return result.toUIMessageStreamResponse({
   originalMessages: body.messages as UIMessage[],
   onError: (error) => {
-    // new
-onError: (error) => {
-  // The retry wrapper nests the real failure in `.cause` — unwrap it.
-  const inner = (error as { cause?: unknown }).cause ?? error;
-  const details = inner as { responseBody?: unknown; data?: unknown; statusCode?: unknown };
-  const rawBody = typeof details.responseBody === "string" ? details.responseBody : JSON.stringify(details.data ?? "");
-  const raw = `${error instanceof Error ? error.message : String(error)} | cause: ${
-    inner instanceof Error ? inner.message : String(inner)
-  } | status: ${details.statusCode ?? "?"} | body: ${rawBody}`;
+    // The retry wrapper nests the real failure in `.cause` — unwrap it.
+    const inner = (error as { cause?: unknown }).cause ?? error;
+    const details = inner as { responseBody?: unknown; data?: unknown; statusCode?: unknown };
+    const rawBody = typeof details.responseBody === "string" ? details.responseBody : JSON.stringify(details.data ?? "");
+    const raw = `${error instanceof Error ? error.message : String(error)} | cause: ${
+      inner instanceof Error ? inner.message : String(inner)
+    } | status: ${details.statusCode ?? "?"} | body: ${rawBody}`;
     console.error("[/api/chat] stream error:", raw, error);
     if (/no.*provider|no.*endpoint/i.test(raw)) {
       return "⚠️ No AI provider currently has capacity for the free model. Try again shortly, or add a Gemini/OpenRouter key with billing for reliability.";
