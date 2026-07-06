@@ -167,13 +167,48 @@ export const Route = createFileRoute("/api/chat")({
           return new Response("messages required", { status: 400 });
         }
 
-        
-const key = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-if (!key) return new Response("Missing GOOGLE_GENERATIVE_AI_API_KEY", { status: 500 });
+        const userId = await getUserIdFromRequest(request);
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-const userId = await getUserIdFromRequest(request);
-const gateway = createGoogleProvider(key);
-const model = gateway("gemini-2.5-flash"); // free-tier eligible — confirm current name at ai.google.dev/gemini-api/docs/models
+        // Provider selection (COMPLETELY FREE by default):
+        //   1. User's stored OpenRouter key (Providers page) → free `:free` model
+        //   2. process.env.OPENROUTER_API_KEY → free `:free` model
+        //   3. process.env.GOOGLE_GENERATIVE_AI_API_KEY → gemini-2.5-flash (Google's free tier)
+        //   4. Error with actionable instructions
+        let model;
+        let providerLabel = "";
+        let openrouterKey: string | null = null;
+        if (userId) {
+          const { data: pk } = await supabaseAdmin
+            .from("provider_keys")
+            .select("api_key, base_url")
+            .eq("user_id", userId)
+            .eq("provider", "openrouter")
+            .order("is_default", { ascending: false })
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (pk?.api_key) openrouterKey = pk.api_key;
+        }
+        if (!openrouterKey && process.env.OPENROUTER_API_KEY) {
+          openrouterKey = process.env.OPENROUTER_API_KEY;
+        }
+
+        if (openrouterKey) {
+          const provider = createOpenRouterProvider(openrouterKey);
+          // Free, tool-calling capable model. Change on the Providers page later if needed.
+          model = provider("google/gemini-2.0-flash-exp:free");
+          providerLabel = "openrouter:gemini-2.0-flash-exp:free";
+        } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+          const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
+          model = provider("gemini-2.5-flash");
+          providerLabel = "google:gemini-2.5-flash";
+        } else {
+          return new Response(
+            "No AI provider configured. Add a FREE OpenRouter key on the Providers page (https://openrouter.ai/keys) — free-tier models require no billing.",
+            { status: 500 },
+          );
+        }
 
         const { callCompanion } = await import("@/lib/companion.server");
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
