@@ -356,25 +356,37 @@ export const Route = createFileRoute("/api/chat")({
 
         // new
 // new
+// new
 const result = streamText({
  model,
  system: SYSTEM_PROMPT,
  messages: await convertToModelMessages(body.messages as UIMessage[]),
  stopWhen: stepCountIs(20),
  maxRetries: 3,
- abortSignal: AbortSignal.timeout(30_000), // fail fast per step instead of hanging up to 120s
+ abortSignal: AbortSignal.timeout(30_000),
  prepareStep: async ({ stepNumber }) => {
    if (stepNumber > 0) await new Promise((r) => setTimeout(r, 4300));
    return {};
  },
- // OpenRouter-specific: keep free-tier requests off the volunteer-hardware
- // network (Darkbloom), which is meaningfully slower/less reliable than
- // dedicated free providers for this model.
- providerOptions: openrouterKey ? {
-   openrouter: {
-     provider: { ignore: ["Darkbloom"] },
-   },
- } : undefined,
+ // Don't hard-exclude Darkbloom — for this free model it may be the only
+ // provider with capacity, and excluding it can leave zero providers
+ // available (which is what just happened). Let OpenRouter's own routing
+ // pick the best available option instead.
+ onError: async ({ error }) => {
+   const details = (error as { responseBody?: unknown; data?: unknown; cause?: unknown });
+   console.error("[/api/chat] generation error — full detail:", {
+     message: error instanceof Error ? error.message : String(error),
+     responseBody: details.responseBody,
+     data: details.data,
+     cause: details.cause,
+   });
+   const message = error instanceof Error ? error.message : String(error);
+   await patchSession({
+     status: "failed",
+     reasoning: `Generation error: ${message}`,
+   });
+   await appendTimeline("🛑", "Generation failed", { error: message });
+ },
   tools: {
             plan_session: tool({
               description:
@@ -757,17 +769,24 @@ const result = streamText({
 return result.toUIMessageStreamResponse({
   originalMessages: body.messages as UIMessage[],
   onError: (error) => {
-    const raw = error instanceof Error ? error.message : String(error);
+    const details = (error as { responseBody?: unknown; data?: unknown });
+    const rawBody = typeof details.responseBody === "string" ? details.responseBody : JSON.stringify(details.data ?? "");
+    const raw = `${error instanceof Error ? error.message : String(error)} ${rawBody}`;
     console.error("[/api/chat] stream error:", raw, error);
-    // Friendlier surface for common Gemini/Google AI Studio failures.
-    if (/resource_exhausted|quota|429/i.test(raw)) {
-      return "⚠️ Gemini free-tier rate limit hit. Wait a minute and retry — free-tier quota resets per minute/day, not per request.";
+    if (/no.*provider|no.*endpoint/i.test(raw)) {
+      return "⚠️ No AI provider currently has capacity for the free model. Try again shortly, or add a Gemini/OpenRouter key with billing for reliability.";
     }
-    if (/api key not valid|permission_denied|401|403/i.test(raw)) {
-      return "⚠️ Gemini API key rejected. Check the GOOGLE_GENERATIVE_AI_API_KEY secret is set and current.";
+    if (/resource_exhausted|quota/i.test(raw)) {
+      return "⚠️ Free-tier quota hit. Wait a minute and retry.";
+    }
+    if (/api key not valid|invalid_api_key|permission_denied|401|403/i.test(raw)) {
+      return "⚠️ API key rejected. Check the provider key secret is set and current.";
+    }
+    if (/429|rate.?limit/i.test(raw)) {
+      return "⚠️ Rate limited. Wait a moment and retry.";
     }
     if (/503|unavailable|overloaded/i.test(raw)) {
-      return "⚠️ Gemini is temporarily overloaded on Google's side. Retry in a moment.";
+      return "⚠️ Provider temporarily overloaded. Retry in a moment.";
     }
     return `AI error: ${raw}`;
   },
