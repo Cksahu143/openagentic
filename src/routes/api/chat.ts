@@ -211,7 +211,6 @@ export const Route = createFileRoute("/api/chat")({
         }
 
         const { callCompanion } = await import("@/lib/companion.server");
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
         // --- Persistent Agent Session ---
         let sessionId: string | null = body.sessionId ?? null;
