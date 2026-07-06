@@ -553,7 +553,9 @@ const result = streamText({
               }),
               execute: async ({ prompt, system, model: modelId }) => {
                 try {
-                  const subModel = gateway(modelId || "gemini-2.5-flash");
+                  const subModel = modelId ? (openrouterKey
+                    ? createOpenRouterProvider(openrouterKey)(modelId)
+                    : model) : model;
                   const sub = await streamText({ model: subModel, system, prompt });
                   let text = "";
                   for await (const chunk of sub.textStream) text += chunk;
