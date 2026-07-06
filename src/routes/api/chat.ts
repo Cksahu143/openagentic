@@ -194,24 +194,38 @@ export const Route = createFileRoute("/api/chat")({
           openrouterKey = process.env.OPENROUTER_API_KEY;
         }
 
-        if (openrouterKey) {
-          const provider = createOpenRouterProvider(openrouterKey);
-          // Free, tool-calling capable model. gemini-2.0-flash-exp:free was
-          // retired by OpenRouter; gpt-oss-20b:free supports tool calling and
-          // is currently available on the free tier.
-          model = provider("openai/gpt-oss-20b:free");
-          providerLabel = "openrouter:gpt-oss-20b:free";
-        } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+        // new
+if (openrouterKey) {
+  const provider = createOpenRouterProvider(openrouterKey);
+  model = provider("openai/gpt-oss-20b:free");
+  providerLabel = "openrouter:gpt-oss-20b:free";
+} else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
+  model = provider("gemini-2.5-flash");
+  providerLabel = "google:gemini-2.5-flash";
+} else {
+  return new Response(
+    "No AI provider configured. Add a FREE OpenRouter key on the Providers page (https://openrouter.ai/keys) — free-tier models require no billing.",
+    { status: 500 },
+  );
+}
 
-          const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
-          model = provider("gemini-2.5-flash");
-          providerLabel = "google:gemini-2.5-flash";
-        } else {
-          return new Response(
-            "No AI provider configured. Add a FREE OpenRouter key on the Providers page (https://openrouter.ai/keys) — free-tier models require no billing.",
-            { status: 500 },
-          );
-        }
+// Health-check the primary provider with a tiny, cheap call. Free-tier
+// providers (esp. volunteer-hosted ones like Darkbloom) can be down or
+// returning empty responses without warning — don't let that take the
+// whole chat down if a real fallback key is available.
+if (openrouterKey && process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  try {
+    const { generateText } = await import("ai");
+    await generateText({ model, prompt: "ping", maxOutputTokens: 4 });
+  } catch (probeError) {
+    console.warn("[/api/chat] primary provider failed health check, falling back to Gemini:",
+      probeError instanceof Error ? probeError.message : String(probeError));
+    const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
+    model = provider("gemini-2.5-flash");
+    providerLabel = "google:gemini-2.5-flash (fallback — openrouter unhealthy)";
+  }
+}
 
         const { callCompanion } = await import("@/lib/companion.server");
 
@@ -769,9 +783,15 @@ const result = streamText({
 return result.toUIMessageStreamResponse({
   originalMessages: body.messages as UIMessage[],
   onError: (error) => {
-    const details = (error as { responseBody?: unknown; data?: unknown });
-    const rawBody = typeof details.responseBody === "string" ? details.responseBody : JSON.stringify(details.data ?? "");
-    const raw = `${error instanceof Error ? error.message : String(error)} ${rawBody}`;
+    // new
+onError: (error) => {
+  // The retry wrapper nests the real failure in `.cause` — unwrap it.
+  const inner = (error as { cause?: unknown }).cause ?? error;
+  const details = inner as { responseBody?: unknown; data?: unknown; statusCode?: unknown };
+  const rawBody = typeof details.responseBody === "string" ? details.responseBody : JSON.stringify(details.data ?? "");
+  const raw = `${error instanceof Error ? error.message : String(error)} | cause: ${
+    inner instanceof Error ? inner.message : String(inner)
+  } | status: ${details.statusCode ?? "?"} | body: ${rawBody}`;
     console.error("[/api/chat] stream error:", raw, error);
     if (/no.*provider|no.*endpoint/i.test(raw)) {
       return "⚠️ No AI provider currently has capacity for the free model. Try again shortly, or add a Gemini/OpenRouter key with billing for reliability.";
