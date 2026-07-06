@@ -8,7 +8,7 @@ import {
 } from "ai";
 import { z } from "zod";
 
-import { createGoogleProvider } from "@/lib/ai-gateway.server";
+import { createGoogleProvider, createOpenRouterProvider } from "@/lib/ai-gateway.server";
 import { fetchUrl } from "@/lib/browser-fetch.server";
 import { runJs } from "@/lib/code-runner.server";
 
