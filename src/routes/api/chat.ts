@@ -196,10 +196,13 @@ export const Route = createFileRoute("/api/chat")({
 
         if (openrouterKey) {
           const provider = createOpenRouterProvider(openrouterKey);
-          // Free, tool-calling capable model. Change on the Providers page later if needed.
-          model = provider("google/gemini-2.0-flash-exp:free");
-          providerLabel = "openrouter:gemini-2.0-flash-exp:free";
+          // Free, tool-calling capable model. gemini-2.0-flash-exp:free was
+          // retired by OpenRouter; gpt-oss-20b:free supports tool calling and
+          // is currently available on the free tier.
+          model = provider("openai/gpt-oss-20b:free");
+          providerLabel = "openrouter:gpt-oss-20b:free";
         } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+
           const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
           model = provider("gemini-2.5-flash");
           providerLabel = "google:gemini-2.5-flash";
