@@ -701,7 +701,7 @@ const result = streamText({
                 let visualSummary: string | undefined;
                 if (analyze) {
                   try {
-                    const visionModel = gateway("google/gemini-3-flash-preview");
+                    const visionModel = model;
                     const messages = [{
                       role: "user" as const,
                       content: [
