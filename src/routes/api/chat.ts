@@ -355,17 +355,26 @@ export const Route = createFileRoute("/api/chat")({
           });
 
         // new
+// new
 const result = streamText({
  model,
  system: SYSTEM_PROMPT,
  messages: await convertToModelMessages(body.messages as UIMessage[]),
- stopWhen: stepCountIs(20), // free-tier RPM can't sustain 60 steps per task
- maxRetries: 3, // built-in retry for transient errors, including 429s
+ stopWhen: stepCountIs(20),
+ maxRetries: 3,
+ abortSignal: AbortSignal.timeout(30_000), // fail fast per step instead of hanging up to 120s
  prepareStep: async ({ stepNumber }) => {
-   // Keep step rate under ~14/min so we don't immediately re-hit the cap.
    if (stepNumber > 0) await new Promise((r) => setTimeout(r, 4300));
    return {};
  },
+ // OpenRouter-specific: keep free-tier requests off the volunteer-hardware
+ // network (Darkbloom), which is meaningfully slower/less reliable than
+ // dedicated free providers for this model.
+ providerOptions: openrouterKey ? {
+   openrouter: {
+     provider: { ignore: ["Darkbloom"] },
+   },
+ } : undefined,
   tools: {
             plan_session: tool({
               description:
