@@ -16,3 +16,19 @@ export function createLovableAiGatewayProvider(apiKey: string) {
 export function createGoogleProvider(apiKey: string) {
   return createGoogleGenerativeAI({ apiKey });
 }
+
+/**
+ * OpenRouter — OpenAI-compatible. Free tier available with `:free` suffixed
+ * models. See https://openrouter.ai/models?q=free
+ */
+export function createOpenRouterProvider(apiKey: string) {
+  return createOpenAICompatible({
+    name: "openrouter",
+    baseURL: "https://openrouter.ai/api/v1",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "HTTP-Referer": "https://openagentic.lovable.app",
+      "X-Title": "OpenAgent",
+    },
+  });
+}
