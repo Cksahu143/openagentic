@@ -127,3 +127,15 @@ user, try a different step, or `complete_session` with a partial result.
 Caps and backoff surface in `recovery_status` / `waiting_status` on
 `agent_sessions` so the Workspace shows them live.
 
+## Python Multi-Agent Service (parallel track)
+
+A second backend, `python-service/` (FastAPI + LangGraph), runs alongside
+the TS app for Python-native work. It is reached from the chat route via
+`src/lib/python-bridge.server.ts` — an authenticated HTTP client, not a
+shared process — exposed to the model as `delegate_to_python_agent` and
+`recall_python_memory`.
+
+It intentionally does not duplicate browser automation or model-provider
+SDKs already handled elsewhere in this codebase. Full rationale, layout,
+run instructions, and an honest list of what has/hasn't been executed live
+in `docs/PYTHON_SERVICE.md`.

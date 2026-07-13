@@ -109,6 +109,35 @@ Companion extension v0.2 with `pageGetDom`/`pageClick`/`pageFill`/`pageSelect`/`
 
 ---
 
+### Python Multi-Agent Service (parallel track, not numbered M1-M20)
+**Status:** ⏳ Added, unverified — introduced at the user's explicit
+request to add a Python backend, a LangGraph multi-agent layer, and (in a
+follow-up request) the agent's own persistent browser plus a one-command
+local setup.
+
+**What shipped:** `python-service/` — FastAPI + LangGraph backend with
+Planner/Research/Browsing/Coding/File agents, a universal tool registry,
+ChromaDB long-term memory, a persistent per-user Chromium browser the agent
+owns (separate from both `headless_browse`'s throwaway instances and the
+JS companion extension's control of the user's real browser), PDF/DOCX/
+image tooling, and an authenticated HTTP bridge exposed to the chat agent
+as `delegate_to_python_agent`, `use_agent_browser`, `list_python_workspace`,
+`recall_python_memory`. `./start.sh` / `start.command` / `start.bat` bring
+up both services with one command; provided Gemini key + bridge token were
+placed in git-ignored `python-service/.env` and `.env.local`.
+
+**Verification status:** built with no network access in the authoring
+sandbox — see `docs/PYTHON_SERVICE.md` → "Honest status" for the full,
+current list of what has and hasn't actually been run (short version:
+`pytest`, `uvicorn`, `playwright install`, and the live TS↔Python round
+trip are all unverified; expect to fix minor issues on first run).
+
+**Explicitly not done:** writing results back into `agent_sessions`,
+multi-worker-safe browser context handling, browser idle-timeout cleanup,
+document tooling beyond what's listed above, background task queue.
+
+---
+
 ## Upcoming milestones
 
 ### M10 · Vision + Screenshot Understanding

@@ -30,6 +30,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-# Add this line to your .gitignore (or append if present)
-# local cached failed writes (do not commit)
+# Local cached failed writes (do not commit)
 var/offline_cache/
+
+# Secrets - never commit (root .env only ever holds PUBLIC Supabase values;
+# anything with real API keys goes in these instead)
+.env.local
+python-service/.env
+python-service/data/

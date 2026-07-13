@@ -11,6 +11,7 @@ import { z } from "zod";
 import { createGoogleProvider, createOpenRouterProvider } from "@/lib/ai-gateway.server";
 import { fetchUrl } from "@/lib/browser-fetch.server";
 import { runJs } from "@/lib/code-runner.server";
+import { executePythonTool, isPythonServiceHealthy, listPythonWorkspaceFiles, recallPythonMemory, runPythonAgent } from "@/lib/python-bridge.server";
 
 const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer-use assistant.
 
@@ -98,6 +99,17 @@ SESSION TOOLS (ALWAYS for multi-step goals — the Workspace shows them live):
 SERVER TOOLS: fetch_url, run_code, ask_ai (ask_ai calls a second model —
   use only when genuinely needed, not as a default reasoning aid).
 CLIENT-APPLIED: save_memory, create_task, write_file.
+PYTHON SERVICE (optional, may be unavailable): delegate_to_python_agent for
+  Python-native sub-goals — it internally routes to research (plain HTTP),
+  browsing (headless JS-rendering browser, no login), coding (sandboxed
+  Python in a persistent workspace), or file (PDF/DOCX/image parsing in
+  that workspace) specialists as needed. use_agent_browser gives direct
+  control of the agent's OWN persistent browser (its own login/cookies,
+  separate from companion_* which controls the USER's browser) — navigate,
+  click, fill, screenshot, upload, tabs. list_python_workspace shows files
+  the Python agent has produced. recall_python_memory does semantic recall
+  over past sessions. All no-op gracefully with an error if the service
+  isn't configured — check the returned { ok } before relying on the result.
 
 COMPANION BROWSER (real Chrome control):
   companion_list_tabs, companion_activate_tab, companion_open_tab,
@@ -598,6 +610,113 @@ const result = streamText({
                   let text = "";
                   for await (const chunk of sub.textStream) text += chunk;
                   return { ok: true, text };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+
+            use_agent_browser: tool({
+              description:
+                "Control the agent's OWN persistent browser (separate from companion_* tools, " +
+                "which control the USER's real browser instead). Cookies/login persist across " +
+                "calls in this browser's own profile. Actions: 'navigate' (args: {url}), " +
+                "'click' (args: {selector}), 'fill' (args: {selector, text}), 'screenshot' " +
+                "(args: {filename}), 'upload_file' (args: {selector, workspace_path}), " +
+                "'list_tabs' (no args), 'new_tab' (args: {url?}), 'close_tab' (args: {tab_index}), " +
+                "'close_session' (no args). This browser does NOT auto-login to anything — if a " +
+                "page needs a login the agent doesn't have, tell the user to run " +
+                "`python scripts/login_google.py <user_id>` once themselves; don't try to type " +
+                "credentials into login forms.",
+              inputSchema: z.object({
+                action: z.enum([
+                  "navigate",
+                  "click",
+                  "fill",
+                  "screenshot",
+                  "upload_file",
+                  "list_tabs",
+                  "new_tab",
+                  "close_tab",
+                  "close_session",
+                ]),
+                args: z.record(z.string(), z.unknown()).default({}),
+              }),
+              execute: async ({ action, args }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  if (!(await isPythonServiceHealthy())) {
+                    return { ok: false, error: "Python service is not reachable or not configured." };
+                  }
+                  const toolName = `agent_browser_${action}`;
+                  const needsSession = action === "screenshot" || action === "upload_file";
+                  const input: Record<string, unknown> = {
+                    user_id: userId,
+                    ...(needsSession ? { session_id: sessionId ?? "default" } : {}),
+                    ...args,
+                  };
+                  return await executePythonTool(toolName, input, ["agent_browser"]);
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            delegate_to_python_agent: tool({
+              description:
+                "Delegate a sub-goal to the Python multi-agent service (planner -> " +
+                "research/browsing/coding/file specialists). Use ONLY for Python-native needs " +
+                "(data-heavy analysis, sandboxed code execution, PDF/DOCX parsing, JS-rendered " +
+                "page reads, semantic long-term memory) that the JS tools above can't do well. " +
+                "Not a substitute for companion_* browser tools when login/authenticated browsing " +
+                "is needed. The agent gets its own persistent workspace directory (files survive " +
+                "across calls within this session) — use list_python_workspace to see what's in it. " +
+                "Requires the Python service to be running and configured.",
+              inputSchema: z.object({ goal: z.string().min(1).max(4000) }),
+              execute: async ({ goal }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  if (!(await isPythonServiceHealthy())) {
+                    return { ok: false, error: "Python service is not reachable or not configured." };
+                  }
+                  const result = await runPythonAgent(goal, userId, body.threadId, sessionId ?? undefined);
+                  return { ok: true, ...result };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            list_python_workspace: tool({
+              description:
+                "List files currently in this session's Python agent workspace " +
+                "(written by delegate_to_python_agent's coding/file steps).",
+              inputSchema: z.object({}),
+              execute: async () => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  if (!sessionId) return { ok: true, files: [] };
+                  if (!(await isPythonServiceHealthy())) {
+                    return { ok: false, error: "Python service is not reachable or not configured." };
+                  }
+                  const files = await listPythonWorkspaceFiles(userId, sessionId);
+                  return { ok: true, files };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            recall_python_memory: tool({
+              description:
+                "Semantic search over this user's long-term memory (Python vector store). " +
+                "Use when you need to recall something from past sessions that isn't in the current context.",
+              inputSchema: z.object({ query: z.string().min(1).max(500) }),
+              execute: async ({ query }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  if (!(await isPythonServiceHealthy())) {
+                    return { ok: false, error: "Python service is not reachable or not configured." };
+                  }
+                  const memories = await recallPythonMemory(userId, query);
+                  return { ok: true, memories };
                 } catch (e) {
                   return { ok: false, error: e instanceof Error ? e.message : String(e) };
                 }
