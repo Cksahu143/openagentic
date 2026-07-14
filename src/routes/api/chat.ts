@@ -216,13 +216,46 @@ export const Route = createFileRoute("/api/chat")({
 
         if (openrouterKey) {
   const provider = createOpenRouterProvider(openrouterKey);
-  // Pinned rather than using the `openrouter/free` auto-router: the
-  // router kept landing on "Darkbloom", a flaky volunteer-hosted free
-  // provider that has repeatedly mishandled tool calls (leaked raw
-  // Harmony tokens, then "tool call outside tool_choice" errors). This
-  // model has been stably free on OpenRouter since Dec 2024.
-  model = provider("meta-llama/llama-3.3-70b-instruct:free");
-  providerLabel = "openrouter:meta-llama/llama-3.3-70b-instruct:free";
+  // Try a short list of established free models in order, since any
+  // single free model/provider pairing can get rate-limited (429) on
+  // its own — e.g. meta-llama/llama-3.3-70b-instruct:free via the
+  // "Venice" host hit 429s repeatedly even though the model itself is
+  // fine. A tiny ping call picks the first one that's actually up.
+  const FREE_MODEL_CANDIDATES = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen3-coder:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+  ];
+  const { generateText } = await import("ai");
+  let picked: string | null = null;
+  for (const candidate of FREE_MODEL_CANDIDATES) {
+    try {
+      await generateText({
+        model: provider(candidate),
+        prompt: "ping",
+        maxOutputTokens: 4,
+        abortSignal: AbortSignal.timeout(6_000),
+      });
+      picked = candidate;
+      break;
+    } catch (probeError) {
+      console.warn(`[/api/chat] free model candidate ${candidate} unavailable:`,
+        probeError instanceof Error ? probeError.message : String(probeError));
+    }
+  }
+  if (picked) {
+    model = provider(picked);
+    providerLabel = `openrouter:${picked}`;
+  } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+    const gProvider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
+    model = gProvider("gemini-2.5-flash");
+    providerLabel = "google:gemini-2.5-flash (fallback — all free OpenRouter candidates unavailable)";
+  } else {
+    return new Response(
+      "All free OpenRouter models are currently rate-limited or unavailable, and no Gemini key is configured as a fallback. Try again shortly, or add credits to your OpenRouter account.",
+      { status: 500 },
+    );
+  }
 } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
   const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
   model = provider("gemini-2.5-flash");
