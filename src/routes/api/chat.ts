@@ -338,39 +338,43 @@ export const Route = createFileRoute("/api/chat")({
             description,
             inputSchema: schema,
             execute: async (args) => {
-              if (!userId) return { ok: false, error: "Not authenticated. Sign in first." };
-              if (sessionId) {
-                const { data: s } = await supabaseAdmin
-                  .from("agent_sessions").select("status").eq("id", sessionId).maybeSingle();
-                if (s?.status === "cancelled") return { ok: false, error: "Session cancelled by user." };
-                if (s?.status === "paused") return { ok: false, error: "Session paused. Resume from Workspace to continue." };
-              }
-              // Waiting-status hint for the workspace panel.
-              if (action === "wait_for" || action === "navigate") {
-                await patchSession({ waiting_status: `${action} ${JSON.stringify(args).slice(0, 80)}` });
-              }
-              await appendTimeline("🛠", action, args);
-              const res = await callCompanion(userId, action, args as Record<string, unknown>);
-              await appendTool(action, args, res);
-              await appendTimeline(res.ok ? "✅" : "⚠️", `${action} ${res.ok ? "ok" : "failed"}`,
-                { error: res.error });
-              const r = res.result as {
-                url?: string; tabId?: number; title?: string;
-                summary?: string; pageState?: string;
-              } | undefined;
-              const patch: Record<string, unknown> = { waiting_status: null };
-              if (r?.url) patch.current_url = r.url;
-              if (r?.tabId) patch.active_tab_id = r.tabId;
-              if (action === "observe" || action === "get_dom") {
-                if (r?.summary) patch.observation_summary = r.summary;
-                if (r?.pageState) patch.page_summary = `${r.title ?? ""} — ${r.pageState}`;
-                // Auto-remember visited URLs.
-                if (r?.url) {
-                  await mergeBrowserMemory({ visitedUrls: [r.url] });
+              try {
+                if (!userId) return { ok: false, error: "Not authenticated. Sign in first." };
+                if (sessionId) {
+                  const { data: s } = await supabaseAdmin
+                    .from("agent_sessions").select("status").eq("id", sessionId).maybeSingle();
+                  if (s?.status === "cancelled") return { ok: false, error: "Session cancelled by user." };
+                  if (s?.status === "paused") return { ok: false, error: "Session paused. Resume from Workspace to continue." };
                 }
+                // Waiting-status hint for the workspace panel.
+                if (action === "wait_for" || action === "navigate") {
+                  await patchSession({ waiting_status: `${action} ${JSON.stringify(args).slice(0, 80)}` });
+                }
+                await appendTimeline("🛠", action, args);
+                const res = await callCompanion(userId, action, args as Record<string, unknown>);
+                await appendTool(action, args, res);
+                await appendTimeline(res.ok ? "✅" : "⚠️", `${action} ${res.ok ? "ok" : "failed"}`,
+                  { error: res.error });
+                const r = res.result as {
+                  url?: string; tabId?: number; title?: string;
+                  summary?: string; pageState?: string;
+                } | undefined;
+                const patch: Record<string, unknown> = { waiting_status: null };
+                if (r?.url) patch.current_url = r.url;
+                if (r?.tabId) patch.active_tab_id = r.tabId;
+                if (action === "observe" || action === "get_dom") {
+                  if (r?.summary) patch.observation_summary = r.summary;
+                  if (r?.pageState) patch.page_summary = `${r.title ?? ""} — ${r.pageState}`;
+                  // Auto-remember visited URLs.
+                  if (r?.url) {
+                    await mergeBrowserMemory({ visitedUrls: [r.url] });
+                  }
+                }
+                await patchSession(patch);
+                return res;
+              } catch (e) {
+                return { ok: false, action, error: e instanceof Error ? e.message : String(e) };
               }
-              await patchSession(patch);
-              return res;
             },
           });
 
@@ -415,10 +419,14 @@ const result = streamText({
                 steps: z.array(z.string().min(2).max(160)).min(1).max(20),
               }),
               execute: async ({ steps }) => {
-                const tree = steps.map((label, i) => ({ i, label, status: "pending" }));
-                await patchSession({ task_tree: tree as never, current_step: 0, status: "running" });
-                await appendTimeline("📋", "Plan created", { steps });
-                return { ok: true, sessionId, steps: tree };
+                try {
+                  const tree = steps.map((label, i) => ({ i, label, status: "pending" }));
+                  await patchSession({ task_tree: tree as never, current_step: 0, status: "running" });
+                  await appendTimeline("📋", "Plan created", { steps });
+                  return { ok: true, sessionId, steps: tree };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
               },
             }),
             update_step: tool({
@@ -430,18 +438,22 @@ const result = streamText({
                 note: z.string().max(400).optional(),
               }),
               execute: async ({ index, status, note }) => {
-                if (!sessionId) return { ok: false, error: "no session" };
-                const { data: row } = await supabaseAdmin
-                  .from("agent_sessions").select("task_tree").eq("id", sessionId).maybeSingle();
-                const tree = Array.isArray(row?.task_tree) ? (row!.task_tree as Array<Record<string, unknown>>) : [];
-                if (tree[index]) { tree[index].status = status; if (note) tree[index].note = note; }
-                await patchSession({ task_tree: tree as never, current_step: index });
-                await appendTimeline(
-                  status === "done" ? "✅" : status === "failed" ? "❌" : status === "skipped" ? "⏭" : "▶️",
-                  `Step ${index + 1}: ${status}`,
-                  { note },
-                );
-                return { ok: true };
+                try {
+                  if (!sessionId) return { ok: false, error: "no session" };
+                  const { data: row } = await supabaseAdmin
+                    .from("agent_sessions").select("task_tree").eq("id", sessionId).maybeSingle();
+                  const tree = Array.isArray(row?.task_tree) ? (row!.task_tree as Array<Record<string, unknown>>) : [];
+                  if (tree[index]) { tree[index].status = status; if (note) tree[index].note = note; }
+                  await patchSession({ task_tree: tree as never, current_step: index });
+                  await appendTimeline(
+                    status === "done" ? "✅" : status === "failed" ? "❌" : status === "skipped" ? "⏭" : "▶️",
+                    `Step ${index + 1}: ${status}`,
+                    { note },
+                  );
+                  return { ok: true };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
               },
             }),
             set_reasoning: tool({
@@ -449,9 +461,13 @@ const result = streamText({
                 "Record current chain-of-thought so the user sees WHY. Keep it short — 1-3 sentences.",
               inputSchema: z.object({ reasoning: z.string().min(1).max(600) }),
               execute: async ({ reasoning }) => {
-                await patchSession({ reasoning });
-                await appendTimeline("💭", "Thinking", { reasoning });
-                return { ok: true };
+                try {
+                  await patchSession({ reasoning });
+                  await appendTimeline("💭", "Thinking", { reasoning });
+                  return { ok: true };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
               },
             }),
             record_recovery: tool({
@@ -464,46 +480,50 @@ const result = streamText({
                 note: z.string().max(400).optional(),
               }),
               execute: async ({ strategy, attempt, stepIndex, note }) => {
-                if (!sessionId) return { ok: false };
-                const MAX_PER_STEP = 4;
-                const MAX_PER_SESSION = 8;
-                const BACKOFFS = [400, 800, 1600, 3200, 5000];
+                try {
+                  if (!sessionId) return { ok: false };
+                  const MAX_PER_STEP = 4;
+                  const MAX_PER_SESSION = 8;
+                  const BACKOFFS = [400, 800, 1600, 3200, 5000];
 
-                const { data: row } = await supabaseAdmin
-                  .from("agent_sessions")
-                  .select("retry_count, tool_history, current_step")
-                  .eq("id", sessionId)
-                  .maybeSingle();
-                const perSession = (row?.retry_count ?? 0) + 1;
-                const effectiveStep =
-                  typeof stepIndex === "number" ? stepIndex : (row?.current_step ?? 0);
-                // Count prior recovery events for this step from tool_history.
-                const history = Array.isArray(row?.tool_history) ? row!.tool_history as Array<Record<string, unknown>> : [];
-                const priorForStep = history.filter(
-                  (h) => h?.tool === "record_recovery" && (h?.stepIndex ?? -1) === effectiveStep,
-                ).length;
-                const perStep = priorForStep + 1;
-                const capped = perStep > MAX_PER_STEP || perSession > MAX_PER_SESSION;
-                const backoffMs = capped
-                  ? 0
-                  : BACKOFFS[Math.min(perStep - 1, BACKOFFS.length - 1)];
+                  const { data: row } = await supabaseAdmin
+                    .from("agent_sessions")
+                    .select("retry_count, tool_history, current_step")
+                    .eq("id", sessionId)
+                    .maybeSingle();
+                  const perSession = (row?.retry_count ?? 0) + 1;
+                  const effectiveStep =
+                    typeof stepIndex === "number" ? stepIndex : (row?.current_step ?? 0);
+                  // Count prior recovery events for this step from tool_history.
+                  const history = Array.isArray(row?.tool_history) ? row!.tool_history as Array<Record<string, unknown>> : [];
+                  const priorForStep = history.filter(
+                    (h) => h?.tool === "record_recovery" && (h?.stepIndex ?? -1) === effectiveStep,
+                  ).length;
+                  const perStep = priorForStep + 1;
+                  const capped = perStep > MAX_PER_STEP || perSession > MAX_PER_SESSION;
+                  const backoffMs = capped
+                    ? 0
+                    : BACKOFFS[Math.min(perStep - 1, BACKOFFS.length - 1)];
 
-                await patchSession({
-                  retry_count: attempt ?? perSession,
-                  recovery_status: capped
-                    ? `CAPPED after ${perStep - 1} attempts on step ${effectiveStep}: ${strategy.slice(0, 240)}`
-                    : `${strategy.slice(0, 260)} (attempt ${perStep}/${MAX_PER_STEP}, backoff ${backoffMs}ms)`,
-                  waiting_status: capped ? null : `backoff ${backoffMs}ms`,
-                });
-                await appendTool("record_recovery", { strategy, stepIndex: effectiveStep, note }, { attempt: perStep, backoffMs, capped });
-                await appendTimeline(
-                  capped ? "🛑" : "🔁",
-                  capped
-                    ? `Recovery cap reached (step ${effectiveStep})`
-                    : `Recovery ${perStep}/${MAX_PER_STEP}: ${strategy}`,
-                  { note, backoffMs, perSession, perStep },
-                );
-                return { ok: true, attempt: perStep, backoffMs, capped, perStep, perSession };
+                  await patchSession({
+                    retry_count: attempt ?? perSession,
+                    recovery_status: capped
+                      ? `CAPPED after ${perStep - 1} attempts on step ${effectiveStep}: ${strategy.slice(0, 240)}`
+                      : `${strategy.slice(0, 260)} (attempt ${perStep}/${MAX_PER_STEP}, backoff ${backoffMs}ms)`,
+                    waiting_status: capped ? null : `backoff ${backoffMs}ms`,
+                  });
+                  await appendTool("record_recovery", { strategy, stepIndex: effectiveStep, note }, { attempt: perStep, backoffMs, capped });
+                  await appendTimeline(
+                    capped ? "🛑" : "🔁",
+                    capped
+                      ? `Recovery cap reached (step ${effectiveStep})`
+                      : `Recovery ${perStep}/${MAX_PER_STEP}: ${strategy}`,
+                    { note, backoffMs, perSession, perStep },
+                  );
+                  return { ok: true, attempt: perStep, backoffMs, capped, perStep, perSession };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
               },
             }),
 
