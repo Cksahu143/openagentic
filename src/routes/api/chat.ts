@@ -216,8 +216,13 @@ export const Route = createFileRoute("/api/chat")({
 
         if (openrouterKey) {
   const provider = createOpenRouterProvider(openrouterKey);
-  model = provider("openrouter/free");
-  providerLabel = "openrouter:openrouter/free (auto-router, tool-calling filtered)";
+  // Pinned rather than using the `openrouter/free` auto-router: the
+  // router kept landing on "Darkbloom", a flaky volunteer-hosted free
+  // provider that has repeatedly mishandled tool calls (leaked raw
+  // Harmony tokens, then "tool call outside tool_choice" errors). This
+  // model has been stably free on OpenRouter since Dec 2024.
+  model = provider("meta-llama/llama-3.3-70b-instruct:free");
+  providerLabel = "openrouter:meta-llama/llama-3.3-70b-instruct:free";
 } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
   const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
   model = provider("gemini-2.5-flash");
