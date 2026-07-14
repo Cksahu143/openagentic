@@ -182,11 +182,19 @@ export const Route = createFileRoute("/api/chat")({
         const userId = await getUserIdFromRequest(request);
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        // Provider selection (COMPLETELY FREE by default):
-        //   1. User's stored OpenRouter key (Providers page) → free `:free` model
-        //   2. process.env.OPENROUTER_API_KEY → free `:free` model
-        //   3. process.env.GOOGLE_GENERATIVE_AI_API_KEY → gemini-2.5-flash (Google's free tier)
-        //   4. Error with actionable instructions
+        // Provider selection:
+        //   1. User's stored OpenRouter key / process.env.OPENROUTER_API_KEY →
+        //      `openrouter/free`, OpenRouter's auto-router. It's free AND it
+        //      only picks from free models that support tool calling, which
+        //      is what the old `openai/gpt-oss-20b:free` pin didn't do (that
+        //      model leaked raw Harmony tokens like "to=functions.update_step"
+        //      into chat because volunteer inference hosts for it don't
+        //      reliably translate tool calls into the proper API format).
+        //   2. process.env.GOOGLE_GENERATIVE_AI_API_KEY → gemini-2.5-flash
+        //      (used as fallback since Gemini quota runs out quickly; note
+        //      Gemini is NOT a free model on OpenRouter as of mid-2026, so
+        //      we call it directly via Google's SDK here, not via OpenRouter)
+        //   3. Error with actionable instructions
         let model;
         let providerLabel = "";
         let openrouterKey: string | null = null;
@@ -206,18 +214,17 @@ export const Route = createFileRoute("/api/chat")({
           openrouterKey = process.env.OPENROUTER_API_KEY;
         }
 
-        // new
-if (openrouterKey) {
+        if (openrouterKey) {
   const provider = createOpenRouterProvider(openrouterKey);
-  model = provider("openai/gpt-oss-20b:free");
-  providerLabel = "openrouter:gpt-oss-20b:free";
+  model = provider("openrouter/free");
+  providerLabel = "openrouter:openrouter/free (auto-router, tool-calling filtered)";
 } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
   const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
   model = provider("gemini-2.5-flash");
   providerLabel = "google:gemini-2.5-flash";
 } else {
   return new Response(
-    "No AI provider configured. Add a FREE OpenRouter key on the Providers page (https://openrouter.ai/keys) — free-tier models require no billing.",
+    "No AI provider configured. Add a FREE OpenRouter key on the Providers page (https://openrouter.ai/keys), or a Gemini key (GOOGLE_GENERATIVE_AI_API_KEY).",
     { status: 500 },
   );
 }
@@ -225,19 +232,6 @@ if (openrouterKey) {
 // Health-check the primary provider with a tiny, cheap call. Free-tier
 // providers (esp. volunteer-hosted ones like Darkbloom) can be down or
 // returning empty responses without warning — don't let that take the
-// whole chat down if a real fallback key is available.
-if (openrouterKey && process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-  try {
-    const { generateText } = await import("ai");
-    await generateText({ model, prompt: "ping", maxOutputTokens: 4 });
-  } catch (probeError) {
-    console.warn("[/api/chat] primary provider failed health check, falling back to Gemini:",
-      probeError instanceof Error ? probeError.message : String(probeError));
-    const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
-    model = provider("gemini-2.5-flash");
-    providerLabel = "google:gemini-2.5-flash (fallback — openrouter unhealthy)";
-  }
-}
 
         const { callCompanion } = await import("@/lib/companion.server");
 

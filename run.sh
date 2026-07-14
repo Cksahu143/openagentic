@@ -6,9 +6,13 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "== Python service: venv + deps =="
+if ! command -v python3.12 >/dev/null 2>&1; then
+  echo "python3.12 not found. Install it first: brew install python@3.12"
+  exit 1
+fi
 if [[ ! -f python-service/.venv/bin/activate ]]; then
   rm -rf python-service/.venv
-  python3 -m venv python-service/.venv
+  python3.12 -m venv python-service/.venv
 fi
 source python-service/.venv/bin/activate
 pip install -q -r python-service/requirements.txt
