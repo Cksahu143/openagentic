@@ -636,10 +636,22 @@ async function scrollPage({ tabId, to, dy }) {
 
 async function waitFor({ tabId, mode, selector, text, timeoutMs, quietMs }) {
   const id = await getActiveTabId(tabId);
-  const [res] = await chrome.scripting.executeScript({
-    target: { tabId: id }, func: pageWaitFor, args: [{ mode, selector, text, quietMs }, timeoutMs],
+  const resolvedTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 15000;
+  const execPromise = chrome.scripting.executeScript({
+    target: { tabId: id }, func: pageWaitFor, args: [{ mode, selector, text, quietMs }, resolvedTimeoutMs],
   });
-  return { ...(res?.result || { ok: false }), tabId: id };
+  // Hard outer guard: if the tab was closed/replaced mid-call, executeScript
+  // itself can hang indefinitely instead of rejecting — never let that block
+  // the pipeline forever.
+  const hardTimeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("executeScript did not return (tab likely closed/replaced)")),
+      resolvedTimeoutMs + 5000));
+  try {
+    const [res] = await Promise.race([execPromise, hardTimeout]);
+    return { ...(res?.result || { ok: false }), tabId: id };
+  } catch (e) {
+    return { ok: false, tabId: id, error: String(e?.message || e) };
+  }
 }
 
 async function releaseTab({ tabId }) {
