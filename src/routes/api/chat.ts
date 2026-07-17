@@ -579,23 +579,31 @@ const result = streamText({
                 }),
               }),
               execute: async ({ memory }) => {
-                await mergeBrowserMemory(memory as Record<string, unknown>);
-                await appendTimeline("🧾", "Browser memory updated", memory);
-                return { ok: true };
+                try {
+                  await mergeBrowserMemory(memory as Record<string, unknown>);
+                  await appendTimeline("🧾", "Browser memory updated", memory);
+                  return { ok: true };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
               },
             }),
             complete_session: tool({
               description: "Mark the current agent session complete when the goal is fully done.",
               inputSchema: z.object({ summary: z.string().max(600).optional() }),
               execute: async ({ summary }) => {
-                await patchSession({
-                  status: "completed",
-                  completed_at: new Date().toISOString(),
-                  reasoning: summary,
-                  waiting_status: null,
-                });
-                await appendTimeline("🎉", "Goal completed", { summary });
-                return { ok: true };
+                try {
+                  await patchSession({
+                    status: "completed",
+                    completed_at: new Date().toISOString(),
+                    reasoning: summary,
+                    waiting_status: null,
+                  });
+                  await appendTimeline("🎉", "Goal completed", { summary });
+                  return { ok: true };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
               },
             }),
 

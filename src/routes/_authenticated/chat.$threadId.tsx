@@ -111,7 +111,7 @@ function ChatThread() {
     [threadId],
   );
 
-  const { messages, sendMessage, status, setMessages, error } = useChat({
+  const { messages, sendMessage, status, setMessages, error, addToolResult } = useChat({
     id: threadId,
     transport,
     messages: initialMessages.data,
@@ -149,11 +149,23 @@ function ChatThread() {
               label: string;
               value: string;
             };
-            await memory.save(kind, label, { text: value }).catch(() => {});
+            let result: Record<string, unknown> = { ok: true };
+            try {
+              await memory.save(kind, label, { text: value });
+            } catch (e) {
+              result = { ok: false, error: e instanceof Error ? e.message : String(e) };
+            }
+            addToolResult({ toolCallId: part.toolCallId, tool: "save_memory", output: result });
           }
           if (part.type === "tool-create_task" && part.state === "input-available") {
             const { goal } = part.input as { goal: string };
-            await tasks.create(goal).catch(() => {});
+            let result: Record<string, unknown> = { ok: true };
+            try {
+              await tasks.create(goal);
+            } catch (e) {
+              result = { ok: false, error: e instanceof Error ? e.message : String(e) };
+            }
+            addToolResult({ toolCallId: part.toolCallId, tool: "create_task", output: result });
           }
           if (part.type === "tool-write_file" && part.state === "input-available") {
             const { path, content, contentType } = part.input as {
@@ -161,7 +173,13 @@ function ChatThread() {
               content: string;
               contentType?: string;
             };
-            await files.write(path, content, contentType).catch(() => {});
+            let result: Record<string, unknown> = { ok: true };
+            try {
+              await files.write(path, content, contentType);
+            } catch (e) {
+              result = { ok: false, error: e instanceof Error ? e.message : String(e) };
+            }
+            addToolResult({ toolCallId: part.toolCallId, tool: "write_file", output: result });
           }
 
         }
