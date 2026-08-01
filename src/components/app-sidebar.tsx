@@ -14,6 +14,7 @@ import {
   Video,
   Blocks,
   MonitorPlay,
+  Monitor,
 } from "lucide-react";
 
 import {
