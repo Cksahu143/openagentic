@@ -9,9 +9,14 @@ import {
 import { z } from "zod";
 
 import { createGoogleProvider, createOpenRouterProvider } from "@/lib/ai-gateway.server";
+import { resolveFreeModel, resolveKeys, noProviderError } from "@/lib/free-providers.server";
 import { fetchUrl } from "@/lib/browser-fetch.server";
 import { runJs } from "@/lib/code-runner.server";
 import { executePythonTool, isPythonServiceHealthy, listPythonWorkspaceFiles, recallPythonMemory, runPythonAgent } from "@/lib/python-bridge.server";
+import {
+  ensureVM, createVM, vmExecuteCommand, vmWriteFile, vmReadFile, vmListFiles,
+  getAppTools, type VMState,
+} from "@/lib/vm.server";
 
 const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer-use assistant.
 
@@ -95,6 +100,29 @@ SESSION TOOLS (ALWAYS for multi-step goals — the Workspace shows them live):
   - record_recovery({ attempt, strategy, note })  — when retrying after failure
   - set_browser_memory({ memory }) — merge session memory
   - complete_session({ summary })
+
+VIRTUAL COMPUTER — you have your own powerful computer (16-core, 32GB RAM,
+  500GB SSD, GPU). Use the VM tools to run terminal commands, write/read files,
+  and execute code in a persistent workspace:
+  - vm_terminal({ command })  — run shell commands (ls, cat, mkdir, echo, run, etc.)
+  - vm_write_file({ path, content }) — create/edit files in your workspace
+  - vm_read_file({ path })     — read a file
+  - vm_list_files({ path })    — list directory contents
+  - vm_run_code({ code })      — execute JavaScript in your sandbox
+  Your workspace persists across the conversation. Use it to write docs, save
+  research, run code, and organize files. The user watches your computer live
+  in the Desktop view.
+
+SUB-AGENTS — for complex multi-part goals, spawn specialized sub-agents that
+  each get their own mini-computer with a restricted set of apps:
+  - spawn_subagent({ name, goal, apps }) — launch a sub-agent. apps is a
+    list from: terminal, editor, filesystem, code-runner, web-browser,
+    ai-brain, researcher, writer, analyst. The sub-agent runs independently
+    with its own VM and tool set.
+  - send_to_subagent({ subAgentId, message }) — send a follow-up instruction.
+  - list_subagents — check status of all sub-agents.
+  Sub-agents do NOT use the user's browser — they work in their own isolated
+  VMs with only the apps you assign them.
 
 SERVER TOOLS: fetch_url, run_code, ask_ai (ask_ai calls a second model —
   use only when genuinely needed, not as a default reasoning aid).
@@ -182,90 +210,21 @@ export const Route = createFileRoute("/api/chat")({
         const userId = await getUserIdFromRequest(request);
         const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        // Provider selection:
-        //   1. User's stored OpenRouter key / process.env.OPENROUTER_API_KEY →
-        //      `openrouter/free`, OpenRouter's auto-router. It's free AND it
-        //      only picks from free models that support tool calling, which
-        //      is what the old `openai/gpt-oss-20b:free` pin didn't do (that
-        //      model leaked raw Harmony tokens like "to=functions.update_step"
-        //      into chat because volunteer inference hosts for it don't
-        //      reliably translate tool calls into the proper API format).
-        //   2. process.env.GOOGLE_GENERATIVE_AI_API_KEY → gemini-2.5-flash
-        //      (used as fallback since Gemini quota runs out quickly; note
-        //      Gemini is NOT a free model on OpenRouter as of mid-2026, so
-        //      we call it directly via Google's SDK here, not via OpenRouter)
-        //   3. Error with actionable instructions
-        let model;
-        let providerLabel = "";
-        let openrouterKey: string | null = null;
-        if (userId) {
-          const { data: pk } = await supabaseAdmin
-            .from("provider_keys")
-            .select("api_key, base_url")
-            .eq("user_id", userId)
-            .eq("provider", "openrouter")
-            .order("is_default", { ascending: false })
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-          if (pk?.api_key) openrouterKey = pk.api_key;
+        // Unified free-tier provider chain: Groq → Gemini → OpenRouter → Cerebras.
+        // Each provider/model has per-failure cooldowns so a bad model is
+        // skipped on the next request. Keys are resolved from the user's
+        // stored provider_keys, falling back to server-side env vars.
+        const keys = await resolveKeys(userId, supabaseAdmin);
+        const provider = await resolveFreeModel(keys);
+        if (!provider) {
+          return new Response(noProviderError(), { status: 500 });
         }
-        if (!openrouterKey && process.env.OPENROUTER_API_KEY) {
-          openrouterKey = process.env.OPENROUTER_API_KEY;
-        }
-
-        let activeFreeModelId: string | null = null;
-        let orProvider: ReturnType<typeof createOpenRouterProvider> | null = null;
-
-        if (openrouterKey) {
-  orProvider = createOpenRouterProvider(openrouterKey);
-  // Rotate through EVERY free, tool-capable model on OpenRouter. Any model
-  // that's rate-limited, out of free quota, or otherwise erroring gets put
-  // on a cooldown by markModelDown() and is skipped on the next request.
-  const { availableFreeModels, markModelDown } = await import("@/lib/openrouter-models.server");
-  const candidates = await availableFreeModels(openrouterKey);
-  const { generateText } = await import("ai");
-  let picked: string | null = null;
-  // Probe at most a handful so a bad day on OpenRouter doesn't stall the
-  // request; the rest stay available for the next attempt.
-  for (const candidate of candidates.slice(0, 6)) {
-    try {
-      await generateText({
-        model: orProvider(candidate),
-        prompt: "ping",
-        maxOutputTokens: 4,
-        abortSignal: AbortSignal.timeout(6_000),
-      });
-      picked = candidate;
-      break;
-    } catch (probeError) {
-      markModelDown(candidate, probeError);
-    }
-  }
-  if (picked) {
-    activeFreeModelId = picked;
-    model = orProvider(picked);
-    providerLabel = `openrouter:${picked}`;
-  } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-    const gProvider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
-    model = gProvider("gemini-2.5-flash");
-    providerLabel = "google:gemini-2.5-flash (fallback — all free OpenRouter candidates unavailable)";
-  } else {
-    return new Response(
-      "All free OpenRouter models are currently rate-limited or unavailable, and no Gemini key is configured as a fallback. Try again shortly, or add credits to your OpenRouter account.",
-      { status: 500 },
-    );
-  }
-} else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-  const provider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
-  model = provider("gemini-2.5-flash");
-  providerLabel = "google:gemini-2.5-flash";
-} else {
-  return new Response(
-    "No AI provider configured. Add a FREE OpenRouter key on the Providers page (https://openrouter.ai/keys), or a Gemini key (GOOGLE_GENERATIVE_AI_API_KEY).",
-    { status: 500 },
-  );
-}
+        let model = provider.model;
+        let providerLabel = provider.label;
+        let activeFreeModelId: string | null = provider.modelId;
+        let activeProviderRef = provider; // for onError markDown
+        // Keys kept for ask_ai delegation tool
+        const openrouterKey = keys.openrouterKey;
 
 
 // Health-check the primary provider with a tiny, cheap call. Free-tier
@@ -443,12 +402,9 @@ const result = streamText({
      data: details.data,
      cause: details.cause,
    });
-    const message = error instanceof Error ? error.message : String(error);
-    // Rotate away from this free model so the next request picks another one.
-    if (activeFreeModelId) {
-      const { markModelDown } = await import("@/lib/openrouter-models.server");
-      markModelDown(activeFreeModelId, error);
-    }
+     const message = error instanceof Error ? error.message : String(error);
+     // Rotate away from the active provider/model so the next request picks another one.
+     if (activeProviderRef) activeProviderRef.markDown(error);
     await patchSession({
       status: "failed",
       reasoning: `Generation error: ${message}`,
@@ -784,6 +740,284 @@ const result = streamText({
                   }
                   const memories = await recallPythonMemory(userId, query);
                   return { ok: true, memories };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+
+            // --- Virtual Computer (VM) ---
+            vm_terminal: tool({
+              description:
+                "Run a terminal command on your virtual computer. Supports: ls, cat, echo, mkdir, touch, rm, write, head, tail, wc, pwd, cd, date, whoami, uname, clear, help, neofetch, tree, find, grep, apps, run <lang> <code>. Your workspace (filesystem + current directory) persists across calls.",
+              inputSchema: z.object({ command: z.string().min(1).max(2000) }),
+              execute: async ({ command }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
+                  const { output, state } = await vmExecuteCommand(
+                    supabaseAdmin, vmState.id, vmState, command,
+                  );
+                  await appendTimeline("💻", "vm: " + command.slice(0, 80), { output: output.slice(0, 200) });
+                  return { ok: true, output, cwd: state.cwd };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            vm_write_file: tool({
+              description: "Write a file to your virtual computer's filesystem. Path is relative to /home/agent. Content is saved persistently.",
+              inputSchema: z.object({
+                path: z.string().min(1).max(300),
+                content: z.string().max(500_000),
+              }),
+              execute: async ({ path, content }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
+                  const { fs } = await vmWriteFile(supabaseAdmin, vmState.id, vmState.fs, path, content);
+                  await appendTimeline("📝", "vm write: " + path, { bytes: content.length });
+                  return { ok: true, path, size: content.length };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            vm_read_file: tool({
+              description: "Read a file from your virtual computer. Returns the file content.",
+              inputSchema: z.object({ path: z.string().min(1).max(300) }),
+              execute: async ({ path }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
+                  return vmReadFile(vmState.fs, path);
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            vm_list_files: tool({
+              description: "List files in a directory on your virtual computer. Omit path for current directory.",
+              inputSchema: z.object({ path: z.string().max(300).optional() }),
+              execute: async ({ path }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
+                  return vmListFiles(vmState.fs, vmState.cwd, path);
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            vm_run_code: tool({
+              description: "Execute JavaScript code in your virtual computer's sandbox. 5s timeout. Use console.log() for output.",
+              inputSchema: z.object({ code: z.string().min(1).max(50_000) }),
+              execute: async ({ code }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  const result = await runJs(code);
+                  await appendTimeline("⚙️", "vm run_code", {});
+                  return result;
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+
+            // --- Sub-Agents ---
+            spawn_subagent: tool({
+              description:
+                "Spawn a specialized sub-agent with its own mini-computer (VM) and a restricted set of apps. " +
+                "The sub-agent runs independently to completion and returns its result. " +
+                "Available apps: terminal, editor, filesystem, code-runner, web-browser, ai-brain, researcher, writer, analyst.",
+              inputSchema: z.object({
+                name: z.string().min(1).max(80),
+                goal: z.string().min(3).max(2000),
+                apps: z.array(z.enum([
+                  "terminal", "editor", "filesystem", "code-runner",
+                  "web-browser", "ai-brain", "researcher", "writer", "analyst",
+                ])).default(["terminal", "filesystem", "code-runner"]),
+              }),
+              execute: async ({ name, goal, apps }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  // Create the sub-agent's mini-VM
+                  const subVM = await createVM(supabaseAdmin, userId, sessionId, name + " VM", apps);
+                  // Create the sub-agent record
+                  const { data: subAgent } = await supabaseAdmin
+                    .from("sub_agents")
+                    .insert({
+                      parent_session_id: sessionId,
+                      vm_id: subVM.id,
+                      user_id: userId,
+                      name,
+                      goal,
+                      status: "running",
+                      allowed_apps: apps,
+                      started_at: new Date().toISOString(),
+                    })
+                    .select("id")
+                    .single();
+                  if (!subAgent) return { ok: false, error: "Failed to create sub-agent" };
+
+                  await appendTimeline("🤖", "Spawned: " + name, { goal: goal.slice(0, 120), apps });
+
+                  // Build restricted toolset from apps
+                  const allowedToolNames = getAppTools(apps);
+                  const subTools = {} as Record<string, unknown>;
+
+                  if (allowedToolNames.includes("vm_terminal")) {
+                    subTools.vm_terminal = tool({
+                      description: "Run a terminal command on your mini-computer.",
+                      inputSchema: z.object({ command: z.string().min(1).max(2000) }),
+                      execute: async ({ command }: { command: string }) => {
+                        const { output } = await vmExecuteCommand(supabaseAdmin, subVM.id, subVM, command);
+                        return { ok: true, output };
+                      },
+                    });
+                  }
+                  if (allowedToolNames.includes("vm_write_file") || allowedToolNames.includes("vm_read_file")) {
+                    if (allowedToolNames.includes("vm_write_file")) {
+                      subTools.vm_write_file = tool({
+                        description: "Write a file to your mini-computer.",
+                        inputSchema: z.object({ path: z.string().min(1).max(300), content: z.string().max(200_000) }),
+                        execute: async ({ path, content }: { path: string; content: string }) => {
+                          const { fs } = await vmWriteFile(supabaseAdmin, subVM.id, subVM.fs, path, content);
+                          subVM.fs = fs;
+                          return { ok: true, path, size: content.length };
+                        },
+                      });
+                    }
+                    if (allowedToolNames.includes("vm_read_file")) {
+                      subTools.vm_read_file = tool({
+                        description: "Read a file from your mini-computer.",
+                        inputSchema: z.object({ path: z.string().min(1).max(300) }),
+                        execute: async ({ path }: { path: string }) => vmReadFile(subVM.fs, path),
+                      });
+                    }
+                  }
+                  if (allowedToolNames.includes("vm_list_files")) {
+                    subTools.vm_list_files = tool({
+                      description: "List files in a directory on your mini-computer.",
+                      inputSchema: z.object({ path: z.string().max(300).optional() }),
+                      execute: async ({ path }: { path?: string }) => vmListFiles(subVM.fs, subVM.cwd, path),
+                    });
+                  }
+                  if (allowedToolNames.includes("vm_run_code")) {
+                    subTools.vm_run_code = tool({
+                      description: "Execute JavaScript code in your mini-computer's sandbox.",
+                      inputSchema: z.object({ code: z.string().min(1).max(50_000) }),
+                      execute: async ({ code }: { code: string }) => runJs(code),
+                    });
+                  }
+                  if (allowedToolNames.includes("fetch_url")) {
+                    subTools.fetch_url = tool({
+                      description: "Fetch a public URL and return its text content.",
+                      inputSchema: z.object({ url: z.string().url() }),
+                      execute: async ({ url }: { url: string }) => {
+                        const r = await fetchUrl(url);
+                        return { ok: r.ok, status: r.status, title: r.title, text: r.text?.slice(0, 5000), links: r.links.slice(0, 20) };
+                      },
+                    });
+                  }
+                  if (allowedToolNames.includes("ask_ai")) {
+                    subTools.ask_ai = tool({
+                      description: "Ask another AI model a question.",
+                      inputSchema: z.object({ prompt: z.string().min(1).max(4000) }),
+                      execute: async ({ prompt }: { prompt: string }) => {
+                        try {
+                          const sub = await streamText({ model, prompt });
+                          let text = "";
+                          for await (const chunk of sub.textStream) text += chunk;
+                          return { ok: true, text };
+                        } catch { return { ok: false, error: "AI unavailable" }; }
+                      },
+                    });
+                  }
+
+                  // Run the sub-agent to completion
+                  const subResult = await streamText({
+                    model,
+                    system: `You are ${name}, a specialized sub-agent of OpenAgent. Goal: ${goal}. You have a virtual computer with these apps: ${apps.join(", ")}. Complete your task efficiently using only the tools provided. Keep responses concise.`,
+                    prompt: goal,
+                    tools: subTools as any,
+                    stopWhen: stepCountIs(10),
+                    maxRetries: 2,
+                    abortSignal: AbortSignal.timeout(120_000),
+                  });
+                  let text = "";
+                  for await (const chunk of subResult.textStream) text += chunk;
+
+                  // Save the result
+                  await supabaseAdmin.from("sub_agents").update({
+                    status: "completed",
+                    result: { text: text.slice(0, 10000) } as never,
+                    completed_at: new Date().toISOString(),
+                    messages: [{ role: "user", content: goal }, { role: "assistant", content: text.slice(0, 10000) }] as never,
+                  }).eq("id", subAgent.id);
+
+                  await appendTimeline("✅", "Sub-agent done: " + name, { result: text.slice(0, 200) });
+                  return { ok: true, subAgentId: subAgent.id, name, result: text };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            list_subagents: tool({
+              description: "List all sub-agents for the current session and their status.",
+              inputSchema: z.object({}),
+              execute: async () => {
+                try {
+                  if (!userId || !sessionId) return { ok: true, subAgents: [] };
+                  const { data } = await supabaseAdmin
+                    .from("sub_agents")
+                    .select("id, name, goal, status, allowed_apps, created_at")
+                    .eq("parent_session_id", sessionId)
+                    .order("created_at", { ascending: false });
+                  return { ok: true, subAgents: data ?? [] };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+            send_to_subagent: tool({
+              description: "Send a follow-up instruction to an existing sub-agent. The sub-agent continues working with its existing VM and tools.",
+              inputSchema: z.object({
+                subAgentId: z.string().uuid(),
+                message: z.string().min(1).max(4000),
+              }),
+              execute: async ({ subAgentId, message }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  const { data: subAgent } = await supabaseAdmin
+                    .from("sub_agents")
+                    .select("id, name, goal, allowed_apps, vm_id, messages")
+                    .eq("id", subAgentId)
+                    .maybeSingle();
+                  if (!subAgent) return { ok: false, error: "Sub-agent not found" };
+
+                  // Update status
+                  await supabaseAdmin.from("sub_agents").update({
+                    status: "running",
+                  }).eq("id", subAgentId);
+
+                  const subResult = await streamText({
+                    model,
+                    system: `You are ${subAgent.name}, a specialized sub-agent of OpenAgent. Original goal: ${subAgent.goal}. The user is sending you a follow-up instruction. Respond and complete the task.`,
+                    prompt: message,
+                    stopWhen: stepCountIs(5),
+                    maxRetries: 2,
+                    abortSignal: AbortSignal.timeout(60_000),
+                  });
+                  let text = "";
+                  for await (const chunk of subResult.textStream) text += chunk;
+
+                  await supabaseAdmin.from("sub_agents").update({
+                    status: "completed",
+                    completed_at: new Date().toISOString(),
+                  }).eq("id", subAgentId);
+
+                  return { ok: true, subAgentId, name: subAgent.name, result: text };
                 } catch (e) {
                   return { ok: false, error: e instanceof Error ? e.message : String(e) };
                 }

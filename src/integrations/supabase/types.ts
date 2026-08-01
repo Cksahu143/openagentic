@@ -133,6 +133,59 @@ export type Database = {
           },
         ]
       }
+      agent_vms: {
+        Row: {
+          created_at: string
+          cwd: string
+          fs: Json
+          id: string
+          installed_apps: string[]
+          label: string
+          session_id: string | null
+          spec: Json
+          status: string
+          terminal_history: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          cwd?: string
+          fs?: Json
+          id?: string
+          installed_apps?: string[]
+          label?: string
+          session_id?: string | null
+          spec?: Json
+          status?: string
+          terminal_history?: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          cwd?: string
+          fs?: Json
+          id?: string
+          installed_apps?: string[]
+          label?: string
+          session_id?: string | null
+          spec?: Json
+          status?: string
+          terminal_history?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_vms_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "agent_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       companion_commands: {
         Row: {
           action: string
@@ -472,6 +525,72 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      sub_agents: {
+        Row: {
+          allowed_apps: string[]
+          completed_at: string | null
+          created_at: string
+          goal: string
+          id: string
+          messages: Json
+          name: string
+          parent_session_id: string | null
+          result: Json | null
+          started_at: string | null
+          status: string
+          system_prompt: string | null
+          user_id: string
+          vm_id: string | null
+        }
+        Insert: {
+          allowed_apps?: string[]
+          completed_at?: string | null
+          created_at?: string
+          goal: string
+          id?: string
+          messages?: Json
+          name: string
+          parent_session_id?: string | null
+          result?: Json | null
+          started_at?: string | null
+          status?: string
+          system_prompt?: string | null
+          user_id: string
+          vm_id?: string | null
+        }
+        Update: {
+          allowed_apps?: string[]
+          completed_at?: string | null
+          created_at?: string
+          goal?: string
+          id?: string
+          messages?: Json
+          name?: string
+          parent_session_id?: string | null
+          result?: Json | null
+          started_at?: string | null
+          status?: string
+          system_prompt?: string | null
+          user_id?: string
+          vm_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sub_agents_parent_session_id_fkey"
+            columns: ["parent_session_id"]
+            isOneToOne: false
+            referencedRelation: "agent_sessions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "sub_agents_vm_id_fkey"
+            columns: ["vm_id"]
+            isOneToOne: false
+            referencedRelation: "agent_vms"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tasks: {
         Row: {
