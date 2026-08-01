@@ -443,12 +443,18 @@ const result = streamText({
      data: details.data,
      cause: details.cause,
    });
-   const message = error instanceof Error ? error.message : String(error);
-   await patchSession({
-     status: "failed",
-     reasoning: `Generation error: ${message}`,
-   });
-   await appendTimeline("🛑", "Generation failed", { error: message });
+    const message = error instanceof Error ? error.message : String(error);
+    // Rotate away from this free model so the next request picks another one.
+    if (activeFreeModelId) {
+      const { markModelDown } = await import("@/lib/openrouter-models.server");
+      markModelDown(activeFreeModelId, error);
+    }
+    await patchSession({
+      status: "failed",
+      reasoning: `Generation error: ${message}`,
+    });
+    await appendTimeline("🛑", "Generation failed", { error: message });
+
  },
   tools: {
             plan_session: tool({
