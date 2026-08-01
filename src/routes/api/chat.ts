@@ -214,24 +214,24 @@ export const Route = createFileRoute("/api/chat")({
           openrouterKey = process.env.OPENROUTER_API_KEY;
         }
 
+        let activeFreeModelId: string | null = null;
+        let orProvider: ReturnType<typeof createOpenRouterProvider> | null = null;
+
         if (openrouterKey) {
-  const provider = createOpenRouterProvider(openrouterKey);
-  // Try a short list of established free models in order, since any
-  // single free model/provider pairing can get rate-limited (429) on
-  // its own — e.g. meta-llama/llama-3.3-70b-instruct:free via the
-  // "Venice" host hit 429s repeatedly even though the model itself is
-  // fine. A tiny ping call picks the first one that's actually up.
-  const FREE_MODEL_CANDIDATES = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen3-coder:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-  ];
+  orProvider = createOpenRouterProvider(openrouterKey);
+  // Rotate through EVERY free, tool-capable model on OpenRouter. Any model
+  // that's rate-limited, out of free quota, or otherwise erroring gets put
+  // on a cooldown by markModelDown() and is skipped on the next request.
+  const { availableFreeModels, markModelDown } = await import("@/lib/openrouter-models.server");
+  const candidates = await availableFreeModels(openrouterKey);
   const { generateText } = await import("ai");
   let picked: string | null = null;
-  for (const candidate of FREE_MODEL_CANDIDATES) {
+  // Probe at most a handful so a bad day on OpenRouter doesn't stall the
+  // request; the rest stay available for the next attempt.
+  for (const candidate of candidates.slice(0, 6)) {
     try {
       await generateText({
-        model: provider(candidate),
+        model: orProvider(candidate),
         prompt: "ping",
         maxOutputTokens: 4,
         abortSignal: AbortSignal.timeout(6_000),
@@ -239,12 +239,12 @@ export const Route = createFileRoute("/api/chat")({
       picked = candidate;
       break;
     } catch (probeError) {
-      console.warn(`[/api/chat] free model candidate ${candidate} unavailable:`,
-        probeError instanceof Error ? probeError.message : String(probeError));
+      markModelDown(candidate, probeError);
     }
   }
   if (picked) {
-    model = provider(picked);
+    activeFreeModelId = picked;
+    model = orProvider(picked);
     providerLabel = `openrouter:${picked}`;
   } else if (process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
     const gProvider = createGoogleProvider(process.env.GOOGLE_GENERATIVE_AI_API_KEY);
@@ -266,6 +266,7 @@ export const Route = createFileRoute("/api/chat")({
     { status: 500 },
   );
 }
+
 
 // Health-check the primary provider with a tiny, cheap call. Free-tier
 // providers (esp. volunteer-hosted ones like Darkbloom) can be down or
@@ -442,12 +443,18 @@ const result = streamText({
      data: details.data,
      cause: details.cause,
    });
-   const message = error instanceof Error ? error.message : String(error);
-   await patchSession({
-     status: "failed",
-     reasoning: `Generation error: ${message}`,
-   });
-   await appendTimeline("🛑", "Generation failed", { error: message });
+    const message = error instanceof Error ? error.message : String(error);
+    // Rotate away from this free model so the next request picks another one.
+    if (activeFreeModelId) {
+      const { markModelDown } = await import("@/lib/openrouter-models.server");
+      markModelDown(activeFreeModelId, error);
+    }
+    await patchSession({
+      status: "failed",
+      reasoning: `Generation error: ${message}`,
+    });
+    await appendTimeline("🛑", "Generation failed", { error: message });
+
  },
   tools: {
             plan_session: tool({
