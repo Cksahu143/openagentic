@@ -14,6 +14,9 @@ export type ProviderName =
   | "openai"
   | "anthropic"
   | "openrouter"
+  | "groq"
+  | "cerebras"
+  | "google"
   | "custom";
 
 export interface ProviderKey {

@@ -14,6 +14,7 @@ import {
   Video,
   Blocks,
   MonitorPlay,
+  Monitor,
 } from "lucide-react";
 
 import {
@@ -32,6 +33,7 @@ import {
 const mainItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "Workspace", url: "/workspace", icon: MonitorPlay },
+  { title: "Computer", url: "/computer", icon: Monitor },
   { title: "Chat", url: "/chat", icon: MessagesSquare },
   { title: "Tasks", url: "/tasks", icon: ListChecks },
   { title: "Memory", url: "/memory", icon: Brain },
