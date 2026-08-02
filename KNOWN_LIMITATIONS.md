@@ -1,5 +1,8 @@
 # OpenAgent — Known Limitations
 
+- The virtual computer is an isolated persistent workspace, not a streamed full operating-system VM; terminal, files, code execution, browser tools, and sub-agent computers are purpose-built services.
+- Free model capacity is upstream-controlled. OpenAgent rotates through the full live OpenRouter free/tool catalog but cannot guarantee capacity if every route is unavailable.
+
 Current as of Milestone 9 completion pass.
 
 ## Autonomy
