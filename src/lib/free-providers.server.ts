@@ -16,7 +16,8 @@ import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createGoogleProvider, createOpenRouterProvider } from "./ai-gateway.server";
 import type { LanguageModel } from "ai";
-import type { LanguageModelV3 } from "@ai-sdk/provider";
+
+type LanguageModelV3 = Extract<LanguageModel, { specificationVersion: "v3" }>;
 
 // ── Provider factories ──────────────────────────────────────
 

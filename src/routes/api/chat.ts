@@ -12,6 +12,7 @@ import { createGoogleProvider, createOpenRouterProvider } from "@/lib/ai-gateway
 import { resolveFreeModel, resolveKeys, noProviderError } from "@/lib/free-providers.server";
 import { fetchUrl } from "@/lib/browser-fetch.server";
 import { runJs } from "@/lib/code-runner.server";
+import { requirePermission } from "@/lib/permissions.server";
 import { executePythonTool, isPythonServiceHealthy, listPythonWorkspaceFiles, recallPythonMemory, runPythonAgent } from "@/lib/python-bridge.server";
 import {
   ensureVM, createVM, vmExecuteCommand, vmWriteFile, vmReadFile, vmListFiles,
@@ -112,6 +113,9 @@ VIRTUAL COMPUTER — you have your own powerful computer (16-core, 32GB RAM,
   Your workspace persists across the conversation. Use it to write docs, save
   research, run code, and organize files. The user watches your computer live
   in the Desktop view.
+  When a request needs files, code, terminal work, isolated browsing, or
+  delegation, call the relevant virtual-computer tool instead of merely
+  describing what you could do.
 
 SUB-AGENTS — for complex multi-part goals, spawn specialized sub-agents that
   each get their own mini-computer with a restricted set of apps:
@@ -328,6 +332,18 @@ export const Route = createFileRoute("/api/chat")({
           if (text) {
             await ensureSession(text);
             await appendTimeline("🧠", "Goal received", { text: text.slice(0, 200) });
+          }
+        }
+
+        if (userId) {
+          try {
+            await requirePermission(supabaseAdmin, userId, "computer:use");
+            const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
+            await appendTimeline("🖥️", "Virtual computer ready", { vmId: vmState.id });
+          } catch (error) {
+            await appendTimeline("🔒", "Virtual computer disabled", {
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
         }
 
@@ -599,6 +615,8 @@ const result = streamText({
               inputSchema: z.object({ url: z.string().url() }),
               execute: async ({ url }) => {
                 try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "browser:use");
                   const r = await fetchUrl(url);
                   return {
                     ok: r.ok, status: r.status, finalUrl: r.finalUrl,
@@ -668,6 +686,7 @@ const result = streamText({
               execute: async ({ action, args }) => {
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "browser:use");
                   if (!(await isPythonServiceHealthy())) {
                     return { ok: false, error: "Python service is not reachable or not configured." };
                   }
@@ -754,6 +773,7 @@ const result = streamText({
               execute: async ({ command }) => {
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
                   const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
                   const { output, state } = await vmExecuteCommand(
                     supabaseAdmin, vmState.id, vmState, command,
@@ -774,6 +794,7 @@ const result = streamText({
               execute: async ({ path, content }) => {
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
                   const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
                   const { fs } = await vmWriteFile(supabaseAdmin, vmState.id, vmState.fs, path, content);
                   await appendTimeline("📝", "vm write: " + path, { bytes: content.length });
@@ -789,6 +810,7 @@ const result = streamText({
               execute: async ({ path }) => {
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
                   const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
                   return vmReadFile(vmState.fs, path);
                 } catch (e) {
@@ -802,6 +824,7 @@ const result = streamText({
               execute: async ({ path }) => {
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
                   const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
                   return vmListFiles(vmState.fs, vmState.cwd, path);
                 } catch (e) {
@@ -815,6 +838,7 @@ const result = streamText({
               execute: async ({ code }) => {
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
                   const result = await runJs(code);
                   await appendTimeline("⚙️", "vm run_code", {});
                   return result;
@@ -841,6 +865,10 @@ const result = streamText({
               execute: async ({ name, goal, apps }) => {
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
+                  if (apps.includes("web-browser")) {
+                    await requirePermission(supabaseAdmin, userId, "browser:use");
+                  }
                   // Create the sub-agent's mini-VM
                   const subVM = await createVM(supabaseAdmin, userId, sessionId, name + " VM", apps);
                   // Create the sub-agent record
