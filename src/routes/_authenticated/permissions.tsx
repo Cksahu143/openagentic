@@ -16,7 +16,8 @@ export const Route = createFileRoute("/_authenticated/permissions")({
 
 const SCOPE_DESCRIPTIONS: Record<string, string> = {
   "ai:generate": "Send prompts to the AI Gateway on your behalf",
-  "browser:navigate": "Fetch public web pages server-side",
+  "browser:use": "Let the agent use the isolated browser in its virtual computer",
+  "computer:use": "Start and operate the agent's isolated virtual computer",
   "companion:connect": "Talk to your paired browser extension",
   "companion:tabs": "List, open, close, focus, and read your tabs",
   "desktop:input": "Send keyboard/mouse input (future desktop companion)",

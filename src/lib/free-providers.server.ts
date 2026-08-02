@@ -2,10 +2,10 @@
  * Unified free-tier AI provider chain (server-only).
  *
  * Tries providers in order of preference:
- *   1. Groq — fast, generous free tier (30 RPM, 1,000 req/day)
- *   2. Google Gemini — most generous free tier (1,500 req/day)
- *   3. OpenRouter free models — auto-rotating 13+ free models
- *   4. Cerebras — very fast, large context (if key available)
+ *   1. Every available OpenRouter tool-capable free model
+ *   2. User-configured Groq models (only when a key exists)
+ *   3. Google Gemini free-tier models (only when a key exists)
+ *   4. User-configured Cerebras models (only when a key exists)
  *
  * Each provider has per-model cooldowns so a failing model is
  * skipped on the next request. The chain falls through cleanly.
@@ -15,7 +15,9 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createGoogleProvider, createOpenRouterProvider } from "./ai-gateway.server";
-import { generateText as aiGenerateText, type LanguageModel } from "ai";
+import type { LanguageModel } from "ai";
+
+type LanguageModelV3 = Extract<LanguageModel, { specificationVersion: "v3" }>;
 
 // ── Provider factories ──────────────────────────────────────
 
@@ -73,14 +75,24 @@ function isCoolingDown(key: string): boolean {
   return (cooldowns.get(key) ?? 0) > Date.now();
 }
 
+function errorText(reason: unknown): string {
+  if (reason instanceof Error) {
+    const extra = reason as Error & { responseBody?: unknown; data?: unknown; cause?: unknown };
+    return [reason.message, extra.responseBody, extra.data, extra.cause]
+      .filter(Boolean)
+      .map(String)
+      .join(" ")
+      .toLowerCase();
+  }
+  return String(reason ?? "").toLowerCase();
+}
+
 export function markProviderDown(
   provider: string,
   model: string,
   reason?: unknown,
 ): void {
-  const msg = (
-    reason instanceof Error ? reason.message : String(reason ?? "")
-  ).toLowerCase();
+  const msg = errorText(reason);
   const quota = msg.includes("402") || msg.includes("credit") || msg.includes("quota") || msg.includes("resource_exhausted");
   const ms = quota ? QUOTA_COOLDOWN_MS : DEFAULT_COOLDOWN_MS;
   cooldowns.set(`${provider}:${model}`, Date.now() + ms);
@@ -150,6 +162,46 @@ export interface ProviderResult {
   markDown: (error: unknown) => void;
 }
 
+function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
+  const models = candidates.map((candidate) => ({
+    candidate,
+    model: candidate.model as LanguageModelV3,
+  }));
+  const primary = models[0]?.model;
+  if (!primary) throw new Error("No language models available");
+
+  return {
+    specificationVersion: "v3",
+    provider: "openagent-free-fallback",
+    modelId: candidates.map((item) => item.label).join(" -> "),
+    supportedUrls: primary.supportedUrls,
+    async doGenerate(options) {
+      let lastError: unknown;
+      for (const { candidate, model } of models) {
+        try {
+          return await model.doGenerate(options);
+        } catch (error) {
+          candidate.markDown(error);
+          lastError = error;
+        }
+      }
+      throw lastError ?? new Error("Every free model failed");
+    },
+    async doStream(options) {
+      let lastError: unknown;
+      for (const { candidate, model } of models) {
+        try {
+          return await model.doStream(options);
+        } catch (error) {
+          candidate.markDown(error);
+          lastError = error;
+        }
+      }
+      throw lastError ?? new Error("Every free model failed");
+    },
+  } satisfies LanguageModelV3;
+}
+
 /**
  * Resolve the best available free model. Tries each provider/model in
  * order, skipping cooled-down ones, until a probe succeeds. Returns the
@@ -158,89 +210,44 @@ export interface ProviderResult {
 export async function resolveFreeModel(
   keys: ResolvedKeys,
 ): Promise<ProviderResult | null> {
-  // 1. Groq
-  if (keys.groqKey) {
-    const provider = createGroqProvider(keys.groqKey);
-    for (const modelId of GROQ_MODELS) {
-      const key = `groq:${modelId}`;
-      if (isCoolingDown(key)) continue;
-      try {
-        await aiGenerateText({
-          model: provider(modelId),
-          prompt: "ping",
-          maxOutputTokens: 4,
-          abortSignal: AbortSignal.timeout(6_000),
-        });
-        return {
-          model: provider(modelId),
-          label: `groq:${modelId}`,
-          provider: "groq",
-          modelId,
-          markDown: (e) => markProviderDown("groq", modelId, e),
-        };
-      } catch (e) {
-        markProviderDown("groq", modelId, e);
-      }
-    }
-  }
+  const candidates: ProviderResult[] = [];
 
-  // 2. Gemini
-  if (keys.geminiKey) {
-    const provider = createGoogleGenerativeAI({ apiKey: keys.geminiKey });
-    for (const modelId of GEMINI_MODELS) {
-      const key = `gemini:${modelId}`;
-      if (isCoolingDown(key)) continue;
-      try {
-        await aiGenerateText({
-          model: provider(modelId),
-          prompt: "ping",
-          maxOutputTokens: 4,
-          abortSignal: AbortSignal.timeout(8_000),
-        });
-        return {
-          model: provider(modelId),
-          label: `gemini:${modelId}`,
-          provider: "gemini",
-          modelId,
-          markDown: (e) => markProviderDown("gemini", modelId, e),
-        };
-      } catch (e) {
-        markProviderDown("gemini", modelId, e);
-      }
-    }
-  }
-
-  // 3. OpenRouter free models
+  // 1. OpenRouter: include the complete live catalog, not an arbitrary slice.
   if (keys.openrouterKey) {
     const provider = createOpenRouterProvider(keys.openrouterKey);
     const { availableFreeModels, markModelDown } = await import(
       "./openrouter-models.server"
     );
-    const candidates = await availableFreeModels(keys.openrouterKey);
-    for (const modelId of candidates.slice(0, 8)) {
-      const key = `openrouter:${modelId}`;
-      if (isCoolingDown(key)) continue;
-      try {
-        await aiGenerateText({
-          model: provider(modelId),
-          prompt: "ping",
-          maxOutputTokens: 4,
-          abortSignal: AbortSignal.timeout(8_000),
-        });
-        return {
-          model: provider(modelId),
-          label: `openrouter:${modelId}`,
-          provider: "openrouter",
-          modelId,
-          markDown: (e) => {
-            markProviderDown("openrouter", modelId, e);
-            markModelDown(modelId, e);
-          },
-        };
-      } catch (e) {
-        markProviderDown("openrouter", modelId, e);
-        markModelDown(modelId, e);
-      }
+    for (const modelId of await availableFreeModels(keys.openrouterKey)) {
+      if (isCoolingDown(`openrouter:${modelId}`)) continue;
+      candidates.push({
+        model: provider(modelId),
+        label: `openrouter:${modelId}`,
+        provider: "openrouter",
+        modelId,
+        markDown: (error) => {
+          markProviderDown("openrouter", modelId, error);
+          markModelDown(modelId, error);
+        },
+      });
+    }
+  }
+
+  // 2. Groq — never attempted without a configured key.
+  if (keys.groqKey) {
+    const provider = createGroqProvider(keys.groqKey);
+    for (const modelId of GROQ_MODELS) {
+      if (isCoolingDown(`groq:${modelId}`)) continue;
+      candidates.push({ model: provider(modelId), label: `groq:${modelId}`, provider: "groq", modelId, markDown: (e) => markProviderDown("groq", modelId, e) });
+    }
+  }
+
+  // 3. Gemini
+  if (keys.geminiKey) {
+    const provider = createGoogleGenerativeAI({ apiKey: keys.geminiKey });
+    for (const modelId of GEMINI_MODELS) {
+      if (isCoolingDown(`gemini:${modelId}`)) continue;
+      candidates.push({ model: provider(modelId), label: `gemini:${modelId}`, provider: "gemini", modelId, markDown: (e) => markProviderDown("gemini", modelId, e) });
     }
   }
 
@@ -248,31 +255,20 @@ export async function resolveFreeModel(
   if (keys.cerebrasKey) {
     const provider = createCerebrasProvider(keys.cerebrasKey);
     for (const modelId of CEREBRAS_MODELS) {
-      const key = `cerebras:${modelId}`;
-      if (isCoolingDown(key)) continue;
-      try {
-        await aiGenerateText({
-          model: provider(modelId),
-          prompt: "ping",
-          maxOutputTokens: 4,
-          abortSignal: AbortSignal.timeout(6_000),
-        });
-        return {
-          model: provider(modelId),
-          label: `cerebras:${modelId}`,
-          provider: "cerebras",
-          modelId,
-          markDown: (e) => markProviderDown("cerebras", modelId, e),
-        };
-      } catch (e) {
-        markProviderDown("cerebras", modelId, e);
-      }
+      if (isCoolingDown(`cerebras:${modelId}`)) continue;
+      candidates.push({ model: provider(modelId), label: `cerebras:${modelId}`, provider: "cerebras", modelId, markDown: (e) => markProviderDown("cerebras", modelId, e) });
     }
   }
 
-  return null;
+  const first = candidates[0];
+  if (!first) return null;
+  return {
+    ...first,
+    model: fallbackLanguageModel(candidates),
+    label: `${first.label} (+${candidates.length - 1} fallbacks)`,
+  };
 }
 
 export function noProviderError(): string {
-  return "No free AI provider is currently available. All providers are rate-limited or cooling down. Try again in a few minutes, or add your own free Groq key (console.groq.com → API Keys) on the Providers page.";
+  return "No free AI model is currently available. Add an OpenRouter key on Providers, or wait for cooled-down free models to recover.";
 }

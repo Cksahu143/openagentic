@@ -1,5 +1,11 @@
 # OpenAgent — Architecture
 
+## Free-model routing and computer permissions
+
+The runtime constructs an ordered fallback model per request. OpenRouter's full live catalog of free, tool-capable models is first; a real generation failure cools down that candidate and advances to the next. Configured Groq, Gemini, and Cerebras models are secondary fallbacks and are never called without credentials.
+
+Virtual-computer and isolated-browser operations require server-checked `computer:use` and `browser:use` grants. Authorized chat work boots the main computer before the first model action. Sub-agent computers receive only explicitly selected apps and never receive companion-browser access.
+
 OpenAgent is a long-term project. The architecture is intentionally modular so
 each capability can be built, replaced, and permission-gated independently.
 

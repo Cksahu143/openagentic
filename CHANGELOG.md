@@ -1,5 +1,12 @@
 # OpenAgent Changelog
 
+## OpenRouter-first virtual computer reliability
+
+- OpenRouter now leads the provider chain; every available free, tool-capable model participates in request-time fallback.
+- Removed availability probes that consumed free quota before real work.
+- Added enforced virtual-computer and isolated-browser permissions.
+- The computer boots for authorized chat work, and its terminal now executes commands directly.
+
 ## Milestone 9 (ultimate completion pass)
 
 ### Added

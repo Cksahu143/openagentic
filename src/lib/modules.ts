@@ -42,12 +42,21 @@ export const MODULE_REGISTRY: ModuleDefinition[] = [
   },
   {
     id: "browser",
-    name: "Browser Controller",
+    name: "Agent Browser",
     description:
-      "Server-side fetch + HTML reader. Lets the agent visit URLs, read pages, check links, call public APIs.",
+      "Lets the virtual computer visit and read public websites in its own isolated browser.",
     status: "alpha",
-    requiredScopes: ["browser:navigate"],
+    requiredScopes: ["browser:use"],
     ownerMilestone: 4,
+  },
+  {
+    id: "computer",
+    name: "Virtual Computer",
+    description:
+      "Persistent isolated workspace with terminal, files, code runner, browser, and sub-agent computers.",
+    status: "alpha",
+    requiredScopes: ["computer:use"],
+    ownerMilestone: 10,
   },
 
   {
