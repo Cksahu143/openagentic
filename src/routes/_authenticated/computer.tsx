@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { runVirtualComputerCommand, startVirtualComputer } from "@/lib/vm.functions";
+import { Button } from "@/components/ui/button";
 import { useHydrated } from "@tanstack/react-router";
 import { Monitor, Terminal, Folder, Cpu, MemoryStick, HardDrive, Bot, Send } from "lucide-react";
 
@@ -36,6 +39,8 @@ interface SubAgentRow {
 
 function ComputerPage() {
   const hydrated = useHydrated();
+  const startComputer = useServerFn(startVirtualComputer);
+  const runComputerCommand = useServerFn(runVirtualComputerCommand);
   const [vms, setVms] = useState<VMRow[]>([]);
   const [activeVM, setActiveVM] = useState<VMRow | null>(null);
   const [subAgents, setSubAgents] = useState<SubAgentRow[]>([]);
@@ -104,12 +109,24 @@ function ComputerPage() {
     const cmd = terminalInput;
     setTerminalInput("");
     setTerminalOutput((prev) => [...prev, `agent@vm:${activeVM.cwd}$ ${cmd}`]);
-    // Commands run through the chat API's VM tool — but we can also
-    // execute directly via a simple server function. For now, show
-    // that the terminal is connected and commands will be visible
-    // when the agent runs them.
-    setTerminalOutput((prev) => [...prev, "  (terminal commands are executed by the agent — this is a live view of what it does)"]);
+    try {
+      const result = await runComputerCommand({ data: { vmId: activeVM.id, command: cmd } });
+      setTerminalOutput((prev) => [...prev, result.output]);
+    } catch (error) {
+      setTerminalOutput((prev) => [...prev, error instanceof Error ? error.message : String(error)]);
+    }
     await loadVMs();
+  };
+
+  const bootComputer = async () => {
+    setLoading(true);
+    try {
+      const vm = await startComputer();
+      setVms([vm as unknown as VMRow]);
+      setActiveVM(vm as unknown as VMRow);
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!hydrated || loading) {
@@ -127,10 +144,10 @@ function ComputerPage() {
         <div className="text-center">
           <h2 className="text-lg font-semibold">No agent computer yet</h2>
           <p className="text-sm text-muted-foreground mt-1 max-w-md">
-            Send a message in Chat and ask the agent to use its virtual computer.
-            It will create a VM automatically, and you'll see it appear here in real time.
+            Enable Virtual Computer in Permissions, then start the isolated workspace.
           </p>
         </div>
+        <Button onClick={bootComputer}>Start computer</Button>
       </div>
     );
   }
