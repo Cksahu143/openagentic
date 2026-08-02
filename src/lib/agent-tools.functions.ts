@@ -8,10 +8,16 @@ import { z } from "zod";
 
 import { fetchUrl } from "@/lib/browser-fetch.server";
 import { runJs } from "@/lib/code-runner.server";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { requirePermission } from "@/lib/permissions.server";
 
 export const fetchUrlFn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ url: z.string().url() }).parse(d))
-  .handler(async ({ data }) => fetchUrl(data.url));
+  .handler(async ({ data, context }) => {
+    await requirePermission(context.supabase, context.userId, "browser:use");
+    return fetchUrl(data.url);
+  });
 
 export const runJsFn = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) =>
