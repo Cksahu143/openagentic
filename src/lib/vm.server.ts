@@ -708,9 +708,9 @@ export const APP_REGISTRY: Record<string, { name: string; description: string; t
   editor: { name: "Code Editor", description: "Write and edit source files", tools: ["vm_write_file", "vm_read_file"] },
   filesystem: { name: "File Manager", description: "Browse and manage files", tools: ["vm_write_file", "vm_read_file", "vm_list_files"] },
   "code-runner": { name: "Code Runner", description: "Execute JS/Python code", tools: ["vm_run_code"] },
-  "web-browser": { name: "Web Browser", description: "Fetch URLs and read pages", tools: ["fetch_url"] },
+  "web-browser": { name: "Web Browser", description: "Visit public URLs, inspect pages, and save snapshots", tools: ["vm_browse"] },
   "ai-brain": { name: "AI Brain", description: "Delegate to another AI model", tools: ["ask_ai"] },
-  "researcher": { name: "Researcher", description: "Web research and summarization", tools: ["fetch_url", "ask_ai"] },
+  "researcher": { name: "Researcher", description: "Web research and summarization", tools: ["vm_browse", "ask_ai"] },
   "writer": { name: "Writer", description: "Document generation", tools: ["vm_write_file", "vm_read_file"] },
   "analyst": { name: "Data Analyst", description: "Run code on data", tools: ["vm_run_code", "vm_read_file"] },
 };

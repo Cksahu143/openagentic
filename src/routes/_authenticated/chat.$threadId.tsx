@@ -7,12 +7,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Bot,
-  ListChecks,
   Loader2,
   Send,
   Sparkles,
   User as UserIcon,
-  Wrench,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
@@ -29,7 +27,16 @@ import { files } from "@/modules/files";
 
 
 export const Route = createFileRoute("/_authenticated/chat/$threadId")({
-  head: () => ({ meta: [{ title: "Chat · OpenAgent" }] }),
+  head: () => ({
+    title: "Agent Chat — OpenAgent",
+    meta: [
+      { name: "description", content: "Give OpenAgent a goal and watch its computer, tasks, code, and previews live." },
+      { property: "og:title", content: "Agent Chat — OpenAgent" },
+      { property: "og:description", content: "Run autonomous goals with a visible agent computer and task workspace." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+    ],
+  }),
   component: ChatThread,
 });
 
