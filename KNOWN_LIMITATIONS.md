@@ -1,6 +1,7 @@
 # OpenAgent — Known Limitations
 
-- The virtual computer is an isolated persistent workspace, not a streamed full operating-system VM; terminal, files, code execution, browser tools, and sub-agent computers are purpose-built services.
+- The virtual computer is an isolated persistent workspace, not a hosted full operating-system VM. Linux, Windows, and macOS modes are compatibility profiles; terminal, files, JavaScript execution, public-page browsing, previews, and sub-agent computers are purpose-built services.
+- The built-in VM browser reads public pages and saves snapshots but does not provide a persistent logged-in Chromium session. Interactive authenticated browsing still requires the paired browser companion or the separately hosted Python service.
 - Free model capacity is upstream-controlled. OpenAgent rotates through the full live OpenRouter free/tool catalog but cannot guarantee capacity if every route is unavailable.
 
 Current as of Milestone 9 completion pass.

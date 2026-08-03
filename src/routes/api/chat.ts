@@ -15,7 +15,7 @@ import { runJs } from "@/lib/code-runner.server";
 import { requirePermission } from "@/lib/permissions.server";
 import { executePythonTool, isPythonServiceHealthy, listPythonWorkspaceFiles, recallPythonMemory, runPythonAgent } from "@/lib/python-bridge.server";
 import {
-  ensureVM, createVM, vmExecuteCommand, vmWriteFile, vmReadFile, vmListFiles,
+  ensureVM, createVM, getVM, vmExecuteCommand, vmWriteFile, vmReadFile, vmListFiles,
   getAppTools, type VMState,
 } from "@/lib/vm.server";
 

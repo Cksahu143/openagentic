@@ -1,5 +1,13 @@
 # OpenAgent Changelog
 
+## Integrated agent cockpit and VM workbench
+
+- Chat now embeds a live agent cockpit for terminal activity, task progress, decision summaries, source files, sub-agents, and website previews; raw tool payloads no longer clutter messages.
+- Added `vm_browse`, an isolated public-web app that persists readable page snapshots into the VM even when the optional Python browser is offline.
+- Fixed mini-computers reading stale terminal/file state and raised autonomous sub-agent runs to the standard 50-step tool loop.
+- Added terminal file operations, file execution, HTML preview discovery, and honest Linux/Windows/macOS compatibility profiles.
+- The planner now explicitly launches independent sub-agent tool calls together so the AI SDK can execute them concurrently.
+
 ## OpenRouter-first virtual computer reliability
 
 - OpenRouter now leads the provider chain; every available free, tool-capable model participates in request-time fallback.
