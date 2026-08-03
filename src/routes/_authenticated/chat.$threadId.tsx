@@ -18,7 +18,7 @@ import ReactMarkdown from "react-markdown";
 import { toast } from "sonner";
 
 import { AppShell } from "@/components/app-shell";
-import { AgentActivity } from "@/components/agent-activity";
+import { AgentCockpit } from "@/components/agent-cockpit";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
@@ -330,7 +330,7 @@ function ChatThread() {
           </form>
         </div>
         <div className="hidden min-h-0 p-3 md:block">
-          <AgentActivity className="h-full" />
+          <AgentCockpit threadId={threadId} compact />
         </div>
       </div>
     </AppShell>
@@ -377,29 +377,8 @@ function MessageBubble({ m }: { m: UIMessage }) {
               </div>
             );
           }
-          if (part.type.startsWith("tool-")) {
-            const name = part.type.replace(/^tool-/, "");
-            const state = "state" in part ? part.state : "unknown";
-            const Icon = name === "create_task" ? ListChecks : Wrench;
-            return (
-              <div
-                key={i}
-                className="flex items-start gap-2 rounded-md border border-border/60 bg-background/40 px-3 py-2 font-mono text-[11px] text-muted-foreground"
-              >
-                <Icon className="mt-0.5 h-3.5 w-3.5 text-primary" />
-                <div className="min-w-0 flex-1">
-                  <div className="uppercase tracking-wider text-primary">
-                    {name} <span className="text-muted-foreground">· {state}</span>
-                  </div>
-                  {"input" in part && part.input ? (
-                    <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words text-foreground/80">
-                      {JSON.stringify(part.input, null, 2)}
-                    </pre>
-                  ) : null}
-                </div>
-              </div>
-            );
-          }
+          // Tool traces belong in the cockpit/timeline, not the conversation.
+          if (part.type.startsWith("tool-")) return null;
           return null;
         })}
       </div>
