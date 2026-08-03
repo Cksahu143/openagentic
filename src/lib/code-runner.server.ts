@@ -1,13 +1,14 @@
 /**
- * Tiny JS sandbox for the planner's run_code tool.
+ * Isolated JavaScript runner for planner and VM tools.
  *
- * Runs the snippet via `new Function` with a captured console and a hard
- * timeout via racing against a Promise. NOT a real isolate — this is fine for
- * small data-munging / quick computation, NOT for running untrusted user code
- * from the open internet.
+ * QuickJS runs as a separate WebAssembly heap with no host APIs, filesystem,
+ * network, process, or environment access. CPU and memory are bounded.
  */
 
+import { getQuickJS, shouldInterruptAfterDeadline } from "quickjs-emscripten";
+
 const TIMEOUT_MS = 5000;
+const MEMORY_LIMIT_BYTES = 32 * 1024 * 1024;
 
 export interface RunCodeResult {
   ok: boolean;
@@ -21,25 +22,39 @@ export interface RunCodeResult {
 export async function runJs(code: string): Promise<RunCodeResult> {
   const started = Date.now();
   const logs: string[] = [];
-  const fakeConsole = {
-    log: (...a: unknown[]) => logs.push(a.map(stringify).join(" ")),
-    warn: (...a: unknown[]) => logs.push("[warn] " + a.map(stringify).join(" ")),
-    error: (...a: unknown[]) => logs.push("[error] " + a.map(stringify).join(" ")),
-  };
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval, no-new-func
-    const fn = new Function(
-      "console",
-      `"use strict"; return (async () => { ${code}\n })();`,
-    ) as (c: typeof fakeConsole) => Promise<unknown>;
+    const QuickJS = await getQuickJS();
+    const runtime = QuickJS.newRuntime();
+    runtime.setMemoryLimit(MEMORY_LIMIT_BYTES);
+    runtime.setMaxStackSize(512 * 1024);
+    runtime.setInterruptHandler(shouldInterruptAfterDeadline(Date.now() + TIMEOUT_MS));
+    const vm = runtime.newContext();
 
-    const result = await Promise.race([
-      fn(fakeConsole),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS),
-      ),
-    ]);
+    const consoleHandle = vm.newObject();
+    for (const level of ["log", "warn", "error"] as const) {
+      const fn = vm.newFunction(level, (...args) => {
+        const line = args.map((arg) => stringify(vm.dump(arg))).join(" ");
+        logs.push(level === "log" ? line : `[${level}] ${line}`);
+      });
+      vm.setProp(consoleHandle, level, fn);
+      fn.dispose();
+    }
+    vm.setProp(vm.global, "console", consoleHandle);
+    consoleHandle.dispose();
+
+    const evaluated = vm.evalCode(`"use strict"; (() => { ${code}\n })()`);
+    if (evaluated.error) {
+      const dumped = vm.dump(evaluated.error);
+      evaluated.error.dispose();
+      vm.dispose();
+      runtime.dispose();
+      throw new Error(typeof dumped === "object" && dumped && "message" in dumped ? String(dumped.message) : stringify(dumped));
+    }
+    const result = vm.dump(evaluated.value);
+    evaluated.value.dispose();
+    vm.dispose();
+    runtime.dispose();
 
     return {
       ok: true,
@@ -70,12 +85,4 @@ function stringify(v: unknown): string {
   }
 }
 
-function safe(v: unknown): unknown {
-  try {
-    return JSON.parse(JSON.stringify(v));
-  } catch {
-    return String(v);
-  }
-}
-void safe;
 

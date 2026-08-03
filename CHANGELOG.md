@@ -7,6 +7,7 @@
 - Fixed mini-computers reading stale terminal/file state and raised autonomous sub-agent runs to the standard 50-step tool loop.
 - Added terminal file operations, file execution, HTML preview discovery, and honest Linux/Windows/macOS compatibility profiles.
 - The planner now explicitly launches independent sub-agent tool calls together so the AI SDK can execute them concurrently.
+- Replaced in-process `new Function` code execution with a memory- and time-bounded QuickJS WebAssembly isolate that exposes no server, environment, filesystem, or network APIs.
 
 ## OpenRouter-first virtual computer reliability
 
