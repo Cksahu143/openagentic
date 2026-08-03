@@ -196,7 +196,7 @@ export async function ensureVM(
 export async function saveVMState(
   supabase: SupabaseClient,
   vmId: string,
-  patch: Partial<Pick<VMState, "fs" | "cwd" | "terminalHistory" | "installedApps" | "status">>,
+  patch: Partial<Pick<VMState, "fs" | "cwd" | "terminalHistory" | "installedApps" | "status" | "spec">>,
 ): Promise<void> {
   const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (patch.fs) update.fs = patch.fs as never;
@@ -204,6 +204,7 @@ export async function saveVMState(
   if (patch.terminalHistory) update.terminal_history = patch.terminalHistory as never;
   if (patch.installedApps) update.installed_apps = patch.installedApps;
   if (patch.status) update.status = patch.status;
+  if (patch.spec) update.spec = patch.spec as never;
   await supabase.from("agent_vms").update(update).eq("id", vmId);
 }
 
@@ -353,6 +354,39 @@ export async function vmExecuteCommand(
       output = args.join(" ").replace(/^["']|["']$/g, "");
       break;
 
+    case "cp": {
+      if (!args[0] || !args[1]) {
+        output = "Usage: cp <source> <destination>";
+      } else {
+        const source = normalizePath(cwd, args[0]);
+        const destination = normalizePath(cwd, args[1]);
+        const file = fs[source];
+        if (!file || file.type !== "file") output = `cp: ${args[0]}: No such file`;
+        else {
+          newFs = { ...fs, [destination]: { ...file, modified: new Date().toISOString() } };
+          await saveVMState(supabase, vmId, { fs: newFs });
+        }
+      }
+      break;
+    }
+
+    case "mv": {
+      if (!args[0] || !args[1]) {
+        output = "Usage: mv <source> <destination>";
+      } else {
+        const source = normalizePath(cwd, args[0]);
+        const destination = normalizePath(cwd, args[1]);
+        const file = fs[source];
+        if (!file) output = `mv: ${args[0]}: No such file`;
+        else {
+          newFs = { ...fs, [destination]: { ...file, modified: new Date().toISOString() } };
+          delete newFs[source];
+          await saveVMState(supabase, vmId, { fs: newFs });
+        }
+      }
+      break;
+    }
+
     case "mkdir": {
       if (!args[0]) {
         output = "mkdir: missing operand";
@@ -480,9 +514,12 @@ export async function vmExecuteCommand(
     case "help":
       output = [
         "OpenAgent Virtual Terminal — available commands:",
-        "  pwd, ls, cd, cat, echo, mkdir, touch, rm, write, head, tail, wc",
+        "  pwd, ls, cd, cat, echo, mkdir, touch, rm, cp, mv, write, head, tail, wc",
         "  date, whoami, uname, clear, help, neofetch, tree, find, grep",
-        "  run <lang> <code>   — execute JS code in the sandbox",
+        "  run js <code>       — execute JavaScript in the sandbox",
+        "  runfile <path>      — execute a JavaScript file",
+        "  preview <path>      — mark an HTML file as the current preview",
+        "  profile [linux|windows|macos] — select shell compatibility profile",
         "  apps                — list installed apps",
       ].join("\n");
       break;
@@ -528,6 +565,61 @@ export async function vmExecuteCommand(
     case "apps":
       output = `Installed apps:\n${state.installedApps.map((a) => `  • ${a}`).join("\n")}`;
       break;
+
+    case "which": {
+      const known = new Set(["pwd", "ls", "cd", "cat", "echo", "mkdir", "touch", "rm", "cp", "mv", "write", "head", "tail", "wc", "date", "whoami", "uname", "clear", "help", "neofetch", "tree", "find", "grep", "apps", "run", "runfile", "preview", "profile"]);
+      output = args[0] && known.has(args[0]) ? `/usr/bin/${args[0]}` : "";
+      break;
+    }
+
+    case "stat": {
+      const target = normalizePath(cwd, args[0] ?? "");
+      const file = fs[target];
+      output = file
+        ? `File: ${target}\nType: ${file.type}\nSize: ${file.size}\nModified: ${file.modified}`
+        : `stat: ${args[0] ?? ""}: No such file`;
+      break;
+    }
+
+    case "profile": {
+      const profile = (args[0] ?? "").toLowerCase();
+      const names: Record<string, string> = {
+        linux: "OpenAgent Linux compatibility workspace",
+        windows: "OpenAgent Windows compatibility workspace",
+        macos: "OpenAgent macOS compatibility workspace",
+      };
+      if (!profile) output = state.spec.os;
+      else if (!names[profile]) output = "profile: choose linux, windows, or macos";
+      else {
+        const spec = { ...state.spec, os: names[profile] };
+        state.spec = spec;
+        await saveVMState(supabase, vmId, { spec });
+        output = `Switched to ${names[profile]}. This changes shell conventions and presentation; it is not a hosted native OS.`;
+      }
+      break;
+    }
+
+    case "preview": {
+      const target = normalizePath(cwd, args[0] ?? "index.html");
+      const file = fs[target];
+      output = file?.type === "file"
+        ? `Preview ready: ${target}`
+        : `preview: ${args[0] ?? "index.html"}: No such file`;
+      break;
+    }
+
+    case "runfile": {
+      const target = normalizePath(cwd, args[0] ?? "");
+      const file = fs[target];
+      if (!file || file.type !== "file") output = `runfile: ${args[0] ?? ""}: No such file`;
+      else {
+        const result = await runJs(file.content);
+        output = result.ok
+          ? [...result.logs, result.result ? `=> ${result.result}` : ""].filter(Boolean).join("\n")
+          : result.error ?? "execution error";
+      }
+      break;
+    }
 
     case "run": {
       const lang = args[0] ?? "js";
@@ -616,9 +708,9 @@ export const APP_REGISTRY: Record<string, { name: string; description: string; t
   editor: { name: "Code Editor", description: "Write and edit source files", tools: ["vm_write_file", "vm_read_file"] },
   filesystem: { name: "File Manager", description: "Browse and manage files", tools: ["vm_write_file", "vm_read_file", "vm_list_files"] },
   "code-runner": { name: "Code Runner", description: "Execute JS/Python code", tools: ["vm_run_code"] },
-  "web-browser": { name: "Web Browser", description: "Fetch URLs and read pages", tools: ["fetch_url"] },
+  "web-browser": { name: "Web Browser", description: "Visit public URLs, inspect pages, and save snapshots", tools: ["vm_browse"] },
   "ai-brain": { name: "AI Brain", description: "Delegate to another AI model", tools: ["ask_ai"] },
-  "researcher": { name: "Researcher", description: "Web research and summarization", tools: ["fetch_url", "ask_ai"] },
+  "researcher": { name: "Researcher", description: "Web research and summarization", tools: ["vm_browse", "ask_ai"] },
   "writer": { name: "Writer", description: "Document generation", tools: ["vm_write_file", "vm_read_file"] },
   "analyst": { name: "Data Analyst", description: "Run code on data", tools: ["vm_run_code", "vm_read_file"] },
 };

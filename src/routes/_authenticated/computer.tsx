@@ -10,7 +10,13 @@ import { Monitor, Terminal, Folder, Cpu, MemoryStick, HardDrive, Bot, Send } fro
 export const Route = createFileRoute("/_authenticated/computer")({
   head: () => ({
     title: "Agent Computer — OpenAgent",
-    meta: [{ name: "description", content: "Live view of the agent virtual computer — terminal, file explorer, and sub-agents" }],
+    meta: [
+      { name: "description", content: "Live view of the OpenAgent computer, terminal, source files, previews, and sub-agents." },
+      { property: "og:title", content: "Agent Computer — OpenAgent" },
+      { property: "og:description", content: "Watch OpenAgent work in its computer with files, terminal activity, and sub-agents." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
+    ],
   }),
   component: ComputerPage,
 });

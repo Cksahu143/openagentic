@@ -15,7 +15,7 @@ import { runJs } from "@/lib/code-runner.server";
 import { requirePermission } from "@/lib/permissions.server";
 import { executePythonTool, isPythonServiceHealthy, listPythonWorkspaceFiles, recallPythonMemory, runPythonAgent } from "@/lib/python-bridge.server";
 import {
-  ensureVM, createVM, vmExecuteCommand, vmWriteFile, vmReadFile, vmListFiles,
+  ensureVM, createVM, getVM, vmExecuteCommand, vmWriteFile, vmReadFile, vmListFiles,
   getAppTools, type VMState,
 } from "@/lib/vm.server";
 
@@ -102,24 +102,29 @@ SESSION TOOLS (ALWAYS for multi-step goals — the Workspace shows them live):
   - set_browser_memory({ memory }) — merge session memory
   - complete_session({ summary })
 
-VIRTUAL COMPUTER — you have your own powerful computer (16-core, 32GB RAM,
-  500GB SSD, GPU). Use the VM tools to run terminal commands, write/read files,
-  and execute code in a persistent workspace:
+VIRTUAL COMPUTER — this is your PRIMARY workspace. It is a persistent,
+  observable compatibility computer, not a hosted native OS. Use its tools
+  before optional Python services for files, code, public web research, and
+  delegation:
   - vm_terminal({ command })  — run shell commands (ls, cat, mkdir, echo, run, etc.)
   - vm_write_file({ path, content }) — create/edit files in your workspace
   - vm_read_file({ path })     — read a file
   - vm_list_files({ path })    — list directory contents
   - vm_run_code({ code })      — execute JavaScript in your sandbox
+  - vm_browse({ url })         — visit a public page and save a readable snapshot
   Your workspace persists across the conversation. Use it to write docs, save
   research, run code, and organize files. The user watches your computer live
-  in the Desktop view.
+  in the chat cockpit and Computer view. Never claim it is unavailable just
+  because the optional Python browser is offline; vm_browse is independent.
   When a request needs files, code, terminal work, isolated browsing, or
   delegation, call the relevant virtual-computer tool instead of merely
   describing what you could do.
 
 SUB-AGENTS — for complex multi-part goals, spawn specialized sub-agents that
   each get their own mini-computer with a restricted set of apps:
-  - spawn_subagent({ name, goal, apps }) — launch a sub-agent. apps is a
+  - spawn_subagent({ name, goal, apps }) — launch a sub-agent. For independent
+    workstreams, issue multiple spawn_subagent calls in the SAME model step so
+    they execute concurrently. apps is a
     list from: terminal, editor, filesystem, code-runner, web-browser,
     ai-brain, researcher, writer, analyst. The sub-agent runs independently
     with its own VM and tool set.
@@ -158,7 +163,9 @@ RULES:
   DOM cannot describe the UI.
 - If a companion tool errors with "No companion device", tell the user to
   install & pair the extension (Devices page) and STOP.
-- Report progress in short markdown updates as you go.
+- Keep the conversation clean: do not narrate raw tool inputs/outputs or logs.
+  Emit only useful progress, decision summaries, deliverables, and blockers.
+  set_reasoning feeds the visible Decision summary outside the message stream.
 
 STOPPING CONDITIONS — always end a session in one of these states, never
 leave it hanging:
@@ -847,6 +854,33 @@ const result = streamText({
                 }
               },
             }),
+            vm_browse: tool({
+              description: "Visit a public URL in the virtual computer's isolated web app. Returns readable page content and saves the latest snapshot in /home/agent/Downloads/browser-last.md.",
+              inputSchema: z.object({ url: z.string().url() }),
+              execute: async ({ url }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  await Promise.all([
+                    requirePermission(supabaseAdmin, userId, "computer:use"),
+                    requirePermission(supabaseAdmin, userId, "browser:use"),
+                  ]);
+                  const [vmState, page] = await Promise.all([
+                    ensureVM(supabaseAdmin, userId, sessionId),
+                    fetchUrl(url),
+                  ]);
+                  if (!page.ok) return { ok: false, status: page.status, error: `Page returned ${page.status}` };
+                  const snapshot = [`# ${page.title || url}`, "", `Source: ${url}`, "", page.text ?? "", "", "## Links", ...page.links.slice(0, 30).map((link) => `- ${link}`)].join("\n");
+                  await Promise.all([
+                    vmWriteFile(supabaseAdmin, vmState.id, vmState.fs, "/home/agent/Downloads/browser-last.md", snapshot),
+                    patchSession({ current_url: url, observation_summary: page.title || url, page_summary: page.text?.slice(0, 500) ?? null }),
+                    appendTimeline("🌐", "vm browser: " + (page.title || url), { url, status: page.status }),
+                  ]);
+                  return { ok: true, url, status: page.status, title: page.title, text: page.text?.slice(0, 12000), links: page.links.slice(0, 30), savedTo: "/home/agent/Downloads/browser-last.md" };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
 
             // --- Sub-Agents ---
             spawn_subagent: tool({
@@ -899,7 +933,9 @@ const result = streamText({
                       description: "Run a terminal command on your mini-computer.",
                       inputSchema: z.object({ command: z.string().min(1).max(2000) }),
                       execute: async ({ command }: { command: string }) => {
-                        const { output } = await vmExecuteCommand(supabaseAdmin, subVM.id, subVM, command);
+                        const current = await getVM(supabaseAdmin, subVM.id);
+                        if (!current) return { ok: false, error: "Mini-computer not found" };
+                        const { output } = await vmExecuteCommand(supabaseAdmin, subVM.id, current, command);
                         return { ok: true, output };
                       },
                     });
@@ -938,13 +974,17 @@ const result = streamText({
                       execute: async ({ code }: { code: string }) => runJs(code),
                     });
                   }
-                  if (allowedToolNames.includes("fetch_url")) {
-                    subTools.fetch_url = tool({
-                      description: "Fetch a public URL and return its text content.",
+                  if (allowedToolNames.includes("vm_browse")) {
+                    subTools.vm_browse = tool({
+                      description: "Visit a public URL in the mini-computer browser and save a readable snapshot.",
                       inputSchema: z.object({ url: z.string().url() }),
                       execute: async ({ url }: { url: string }) => {
-                        const r = await fetchUrl(url);
-                        return { ok: r.ok, status: r.status, title: r.title, text: r.text?.slice(0, 5000), links: r.links.slice(0, 20) };
+                        const [r, current] = await Promise.all([fetchUrl(url), getVM(supabaseAdmin, subVM.id)]);
+                        if (!current) return { ok: false, error: "Mini-computer not found" };
+                        const snapshot = [`# ${r.title || url}`, "", `Source: ${url}`, "", r.text ?? ""].join("\n");
+                        const written = await vmWriteFile(supabaseAdmin, subVM.id, current.fs, "/home/agent/Downloads/browser-last.md", snapshot);
+                        subVM.fs = written.fs;
+                        return { ok: r.ok, status: r.status, title: r.title, text: r.text?.slice(0, 5000), links: r.links.slice(0, 20), savedTo: "/home/agent/Downloads/browser-last.md" };
                       },
                     });
                   }
@@ -969,7 +1009,7 @@ const result = streamText({
                     system: `You are ${name}, a specialized sub-agent of OpenAgent. Goal: ${goal}. You have a virtual computer with these apps: ${apps.join(", ")}. Complete your task efficiently using only the tools provided. Keep responses concise.`,
                     prompt: goal,
                     tools: subTools as any,
-                    stopWhen: stepCountIs(10),
+                    stopWhen: stepCountIs(50),
                     maxRetries: 2,
                     abortSignal: AbortSignal.timeout(120_000),
                   });

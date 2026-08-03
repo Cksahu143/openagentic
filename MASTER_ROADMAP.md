@@ -8,6 +8,7 @@ After M20, development moves to semantic versioning (v1.1, v1.2, v2.0…).
 **Current milestone:** M9 — Autonomous Agent Sessions + Hybrid Observation ✅ (ultimate completion pass shipped: reliable clicking, recovery caps + backoff, fast-path execution, verification criteria, VISION + M9 verification report)
 
 **Reliability pass:** OpenRouter-first full free-model rotation, server-enforced computer/browser permissions, automatic computer boot, and direct terminal execution ✅
+**Workbench pass:** Chat-integrated VM cockpit, isolated `vm_browse`, code/HTML preview, concurrent mini-agents, expanded terminal, and cross-OS compatibility profiles ✅
 **Completion:** 9 / 20 = **45%**
 
 | # | Milestone | Status |
