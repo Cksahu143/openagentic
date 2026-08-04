@@ -99,6 +99,32 @@ export const DEFAULT_APPS = [
   "web-browser",
 ];
 
+/**
+ * Installable packages. `install <id>` adds the package (and everything it
+ * provides) to the VM's app list, unlocking its shell command and tools.
+ */
+export const PACKAGE_REGISTRY: Record<
+  string,
+  { description: string; version: string; provides: string[] }
+> = {
+  node: { description: "Node.js JavaScript runtime", version: "v22.11.0", provides: ["node", "npm", "npx"] },
+  bun: { description: "Bun JavaScript runtime & bundler", version: "v1.2.0", provides: ["bun", "node"] },
+  deno: { description: "Deno secure TypeScript runtime", version: "v2.1.0", provides: ["deno"] },
+  typescript: { description: "TypeScript compiler (tsc)", version: "v5.7.0", provides: ["typescript", "tsc"] },
+  python3: { description: "Python 3 interpreter", version: "3.12.4", provides: ["python3", "pip"] },
+  git: { description: "Distributed version control", version: "2.47.0", provides: ["git"] },
+  curl: { description: "HTTP transfer tool", version: "8.11.0", provides: ["curl"] },
+  sqlite3: { description: "Embedded SQL database", version: "3.47.0", provides: ["sqlite3"] },
+  ffmpeg: { description: "Audio/video processing", version: "7.1", provides: ["ffmpeg"] },
+  "web-browser": { description: "Headless web browser", version: "1.0", provides: ["web-browser"] },
+  "code-runner": { description: "Sandboxed code execution", version: "1.0", provides: ["code-runner"] },
+  editor: { description: "Source code editor", version: "1.0", provides: ["editor"] },
+  "ai-brain": { description: "Delegate work to another AI model", version: "1.0", provides: ["ai-brain"] },
+  researcher: { description: "Web research & summarization", version: "1.0", provides: ["researcher"] },
+  writer: { description: "Document generation", version: "1.0", provides: ["writer"] },
+  analyst: { description: "Data analysis toolkit", version: "1.0", provides: ["analyst"] },
+};
+
 function defaultFS(): VFS {
   const now = new Date().toISOString();
   return {
