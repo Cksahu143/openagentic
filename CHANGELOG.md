@@ -1,5 +1,16 @@
 # OpenAgent Changelog
 
+## Cyclic free-model rotation, VM package manager, agentic resilience
+
+- Free-model rotation is now a true loop: after the last OpenRouter free model runs out of credits or gets rate limited, the chain clears cooldowns and wraps back to the first model, cycling up to three times with backoff before failing.
+- `resolveFreeModel` no longer returns "no model available" when everything is cooling down — it resets the rotation and starts from the top.
+- The virtual computer gained a package manager: `install` / `apt` / `npm` / `pip` / `brew` install Node, Bun, Deno, TypeScript, Python 3, git, curl, sqlite3, ffmpeg and the agent apps; `install --list`, `uninstall`, `open <app>`, `ps`, `env` and an installed-aware `which` round it out.
+- `node` / `bun` / `deno` now execute JavaScript inside the VM sandbox once installed, and `git` supports basic subcommands.
+- The agent loop is more resilient: 50-step tool loops, 5 provider retries, exponential-backoff retries on every network tool, and a system prompt that requires diagnosing, installing missing packages, and trying multiple strategies before reporting failure.
+
+## Integrated agent cockpit and VM workbench
+
+
 ## Integrated agent cockpit and VM workbench
 
 - Chat now embeds a live agent cockpit for terminal activity, task progress, decision summaries, source files, sub-agents, and website previews; raw tool payloads no longer clutter messages.

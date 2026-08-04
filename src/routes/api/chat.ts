@@ -19,6 +19,28 @@ import {
   getAppTools, type VMState,
 } from "@/lib/vm.server";
 
+/**
+ * Retry a flaky async operation with exponential backoff. Used by network
+ * tools so a single transient failure never ends an autonomous run.
+ */
+async function withRetry<T>(
+  label: string,
+  op: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await op();
+    } catch (error) {
+      lastError = error;
+      console.warn(`[chat] ${label} attempt ${i + 1}/${attempts} failed:`, error);
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * 2 ** i));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer-use assistant.
 
 You operate in a continuous OBSERVE → THINK → ACT → VERIFY loop with hybrid perception:
@@ -119,6 +141,24 @@ VIRTUAL COMPUTER — this is your PRIMARY workspace. It is a persistent,
   When a request needs files, code, terminal work, isolated browsing, or
   delegation, call the relevant virtual-computer tool instead of merely
   describing what you could do.
+
+  APPS & PACKAGES — your computer can install and launch software:
+   - vm_terminal({ command: "install --list" })  — see every available package
+   - vm_terminal({ command: "install node git python3" }) — install packages
+   - vm_terminal({ command: "open editor" })     — launch an installed app
+   - vm_terminal({ command: "node -e \\"console.log(1+1)\\"" }) — run Node
+   - "apps", "ps", "env", "which <cmd>" report what is available.
+   If a command reports "command not found", install the package and retry
+   instead of giving up.
+
+RESILIENCE — you are an autonomous agent, not a one-shot responder:
+   - If a tool fails, diagnose the error, adjust the approach, and retry
+     (call record_recovery to log the attempt). Try at least 2-3 distinct
+     strategies before reporting failure.
+   - Prefer the cheapest recovery first: re-read state, fix the path/arg,
+     install a missing package, then fall back to a different tool.
+   - Never end a turn with "I couldn't do it" while an untried alternative
+     tool exists. Never fabricate results you did not obtain.
 
 SUB-AGENTS — for complex multi-part goals, spawn specialized sub-agents that
   each get their own mini-computer with a restricted set of apps:
@@ -406,8 +446,8 @@ const result = streamText({
  model,
  system: SYSTEM_PROMPT,
  messages: await convertToModelMessages(body.messages as UIMessage[]),
- stopWhen: stepCountIs(20),
- maxRetries: 3,
+ stopWhen: stepCountIs(50),
+ maxRetries: 5,
  abortSignal: AbortSignal.timeout(300_000), // 5 min — must stay well above callCompanion's per-call timeout (45s default) since a plan can involve many sequential browser round-trips
  prepareStep: async ({ stepNumber }) => {
    if (stepNumber > 0) await new Promise((r) => setTimeout(r, 4300));
@@ -624,7 +664,7 @@ const result = streamText({
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
                   await requirePermission(supabaseAdmin, userId, "browser:use");
-                  const r = await fetchUrl(url);
+                  const r = await withRetry(`fetch_url ${url}`, () => fetchUrl(url));
                   return {
                     ok: r.ok, status: r.status, finalUrl: r.finalUrl,
                     title: r.title, contentType: r.contentType, text: r.text,
@@ -866,7 +906,7 @@ const result = streamText({
                   ]);
                   const [vmState, page] = await Promise.all([
                     ensureVM(supabaseAdmin, userId, sessionId),
-                    fetchUrl(url),
+                    withRetry(`vm_browse ${url}`, () => fetchUrl(url)),
                   ]);
                   if (!page.ok) return { ok: false, status: page.status, error: `Page returned ${page.status}` };
                   const snapshot = [`# ${page.title || url}`, "", `Source: ${url}`, "", page.text ?? "", "", "## Links", ...page.links.slice(0, 30).map((link) => `- ${link}`)].join("\n");

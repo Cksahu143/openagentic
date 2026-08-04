@@ -101,6 +101,14 @@ export function markProviderDown(
   );
 }
 
+/** Forget every cooldown so rotation wraps back around to the first model. */
+export function clearCooldowns(): void {
+  if (cooldowns.size > 0) {
+    console.warn(`[providers] cycling rotation — clearing ${cooldowns.size} cooldown(s)`);
+    cooldowns.clear();
+  }
+}
+
 export function cooldownStatus(): Record<string, number> {
   const out: Record<string, number> = {};
   const now = Date.now();
@@ -162,6 +170,30 @@ export interface ProviderResult {
   markDown: (error: unknown) => void;
 }
 
+/** How many times the rotation wraps back to the first model before giving up. */
+const ROTATION_CYCLES = 3;
+/** Pause before starting another cycle so rate-limited models can recover. */
+const CYCLE_PAUSE_MS = 1500;
+
+function isTransient(error: unknown): boolean {
+  const msg = errorText(error);
+  return (
+    msg.includes("429") ||
+    msg.includes("rate") ||
+    msg.includes("timeout") ||
+    msg.includes("overload") ||
+    msg.includes("503") ||
+    msg.includes("502") ||
+    msg.includes("temporar")
+  );
+}
+
+/**
+ * Wraps the whole candidate list into one model that walks the rotation.
+ * When the LAST model fails (credits gone or rate limited) it wraps around
+ * to the FIRST model again — cooldowns are cleared between cycles so the
+ * rotation is a true loop rather than a one-shot pass.
+ */
 function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
   const models = candidates.map((candidate) => ({
     candidate,
@@ -170,35 +202,38 @@ function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
   const primary = models[0]?.model;
   if (!primary) throw new Error("No language models available");
 
+  async function attempt<T>(run: (model: LanguageModelV3) => PromiseLike<T>): Promise<T> {
+    let lastError: unknown;
+    for (let cycle = 0; cycle < ROTATION_CYCLES; cycle++) {
+      if (cycle > 0) {
+        // Full loop completed — wrap around to the first model again.
+        clearCooldowns();
+        const { clearModelCooldowns } = await import("./openrouter-models.server");
+        clearModelCooldowns();
+        await new Promise((r) => setTimeout(r, CYCLE_PAUSE_MS * cycle));
+        console.warn(`[providers] rotation cycle ${cycle + 1}/${ROTATION_CYCLES} — restarting at the first free model`);
+      }
+      for (const { candidate, model } of models) {
+        try {
+          return await run(model);
+        } catch (error) {
+          candidate.markDown(error);
+          lastError = error;
+        }
+      }
+      // Only keep cycling while failures look recoverable.
+      if (!isTransient(lastError) && cycle >= 1) break;
+    }
+    throw lastError ?? new Error("Every free model failed");
+  }
+
   return {
     specificationVersion: "v3",
     provider: "openagent-free-fallback",
     modelId: candidates.map((item) => item.label).join(" -> "),
     supportedUrls: primary.supportedUrls,
-    async doGenerate(options) {
-      let lastError: unknown;
-      for (const { candidate, model } of models) {
-        try {
-          return await model.doGenerate(options);
-        } catch (error) {
-          candidate.markDown(error);
-          lastError = error;
-        }
-      }
-      throw lastError ?? new Error("Every free model failed");
-    },
-    async doStream(options) {
-      let lastError: unknown;
-      for (const { candidate, model } of models) {
-        try {
-          return await model.doStream(options);
-        } catch (error) {
-          candidate.markDown(error);
-          lastError = error;
-        }
-      }
-      throw lastError ?? new Error("Every free model failed");
-    },
+    doGenerate: (options) => attempt((model) => model.doGenerate(options)),
+    doStream: (options) => attempt((model) => model.doStream(options)),
   } satisfies LanguageModelV3;
 }
 
@@ -207,19 +242,24 @@ function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
  * order, skipping cooled-down ones, until a probe succeeds. Returns the
  * first working model or null if everything is unavailable.
  */
-export async function resolveFreeModel(
+async function buildCandidates(
   keys: ResolvedKeys,
-): Promise<ProviderResult | null> {
+  ignoreCooldowns: boolean,
+): Promise<ProviderResult[]> {
   const candidates: ProviderResult[] = [];
+  const down = (key: string) => !ignoreCooldowns && isCoolingDown(key);
 
   // 1. OpenRouter: include the complete live catalog, not an arbitrary slice.
   if (keys.openrouterKey) {
     const provider = createOpenRouterProvider(keys.openrouterKey);
-    const { availableFreeModels, markModelDown } = await import(
+    const { availableFreeModels, listFreeModels, markModelDown } = await import(
       "./openrouter-models.server"
     );
-    for (const modelId of await availableFreeModels(keys.openrouterKey)) {
-      if (isCoolingDown(`openrouter:${modelId}`)) continue;
+    const ids = ignoreCooldowns
+      ? await listFreeModels(keys.openrouterKey)
+      : await availableFreeModels(keys.openrouterKey);
+    for (const modelId of ids) {
+      if (down(`openrouter:${modelId}`)) continue;
       candidates.push({
         model: provider(modelId),
         label: `openrouter:${modelId}`,
@@ -237,7 +277,7 @@ export async function resolveFreeModel(
   if (keys.groqKey) {
     const provider = createGroqProvider(keys.groqKey);
     for (const modelId of GROQ_MODELS) {
-      if (isCoolingDown(`groq:${modelId}`)) continue;
+      if (down(`groq:${modelId}`)) continue;
       candidates.push({ model: provider(modelId), label: `groq:${modelId}`, provider: "groq", modelId, markDown: (e) => markProviderDown("groq", modelId, e) });
     }
   }
@@ -246,7 +286,7 @@ export async function resolveFreeModel(
   if (keys.geminiKey) {
     const provider = createGoogleGenerativeAI({ apiKey: keys.geminiKey });
     for (const modelId of GEMINI_MODELS) {
-      if (isCoolingDown(`gemini:${modelId}`)) continue;
+      if (down(`gemini:${modelId}`)) continue;
       candidates.push({ model: provider(modelId), label: `gemini:${modelId}`, provider: "gemini", modelId, markDown: (e) => markProviderDown("gemini", modelId, e) });
     }
   }
@@ -255,9 +295,27 @@ export async function resolveFreeModel(
   if (keys.cerebrasKey) {
     const provider = createCerebrasProvider(keys.cerebrasKey);
     for (const modelId of CEREBRAS_MODELS) {
-      if (isCoolingDown(`cerebras:${modelId}`)) continue;
+      if (down(`cerebras:${modelId}`)) continue;
       candidates.push({ model: provider(modelId), label: `cerebras:${modelId}`, provider: "cerebras", modelId, markDown: (e) => markProviderDown("cerebras", modelId, e) });
     }
+  }
+
+  return candidates;
+}
+
+/**
+ * Resolve the best available free model. Returns a single model that walks
+ * the whole rotation and wraps back to the first model after the last one
+ * runs out of credits or gets rate limited.
+ */
+export async function resolveFreeModel(
+  keys: ResolvedKeys,
+): Promise<ProviderResult | null> {
+  let candidates = await buildCandidates(keys, false);
+  if (candidates.length === 0) {
+    // Everything is cooling down — wrap around and start from the top again.
+    clearCooldowns();
+    candidates = await buildCandidates(keys, true);
   }
 
   const first = candidates[0];

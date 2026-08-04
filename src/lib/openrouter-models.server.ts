@@ -111,6 +111,14 @@ export function markModelDown(id: string, reason?: unknown): void {
   console.warn(`[openrouter] ${id} on cooldown (${quota ? "quota" : "error"}): ${msg.slice(0, 200)}`);
 }
 
+/** Forget every cooldown so the rotation wraps back to the first model. */
+export function clearModelCooldowns(): void {
+  if (cooldowns.size > 0) {
+    console.warn(`[openrouter] cycling rotation — clearing ${cooldowns.size} cooldown(s)`);
+    cooldowns.clear();
+  }
+}
+
 export function cooldownSnapshot(): Record<string, number> {
   const now = Date.now();
   const out: Record<string, number> = {};
