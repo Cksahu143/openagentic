@@ -546,7 +546,13 @@ export async function vmExecuteCommand(
         "  runfile <path>      — execute a JavaScript file",
         "  preview <path>      — mark an HTML file as the current preview",
         "  profile [linux|windows|macos] — select shell compatibility profile",
-        "  apps                — list installed apps",
+        "  apps                — list installed apps & packages",
+        "  install <pkg...>    — install packages (node, bun, python3, git, ...)",
+        "  install --list      — show every available package",
+        "  uninstall <pkg>     — remove a package",
+        "  open <app> [args]   — launch an installed app on the agent desktop",
+        "  node <file|-e code> — run JavaScript with Node",
+        "  git <sub>, ps, env, which, stat",
       ].join("\n");
       break;
 
