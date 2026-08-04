@@ -202,7 +202,7 @@ function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
   const primary = models[0]?.model;
   if (!primary) throw new Error("No language models available");
 
-  async function attempt<T>(run: (model: LanguageModelV3) => Promise<T>): Promise<T> {
+  async function attempt<T>(run: (model: LanguageModelV3) => PromiseLike<T>): Promise<T> {
     let lastError: unknown;
     for (let cycle = 0; cycle < ROTATION_CYCLES; cycle++) {
       if (cycle > 0) {
