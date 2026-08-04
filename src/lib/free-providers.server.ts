@@ -101,6 +101,14 @@ export function markProviderDown(
   );
 }
 
+/** Forget every cooldown so rotation wraps back around to the first model. */
+export function clearCooldowns(): void {
+  if (cooldowns.size > 0) {
+    console.warn(`[providers] cycling rotation — clearing ${cooldowns.size} cooldown(s)`);
+    cooldowns.clear();
+  }
+}
+
 export function cooldownStatus(): Record<string, number> {
   const out: Record<string, number> = {};
   const now = Date.now();
