@@ -19,6 +19,28 @@ import {
   getAppTools, type VMState,
 } from "@/lib/vm.server";
 
+/**
+ * Retry a flaky async operation with exponential backoff. Used by network
+ * tools so a single transient failure never ends an autonomous run.
+ */
+async function withRetry<T>(
+  label: string,
+  op: () => Promise<T>,
+  attempts = 3,
+): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await op();
+    } catch (error) {
+      lastError = error;
+      console.warn(`[chat] ${label} attempt ${i + 1}/${attempts} failed:`, error);
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 400 * 2 ** i));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 const SYSTEM_PROMPT = `You are OpenAgent — a free, modular AI computer-use assistant.
 
 You operate in a continuous OBSERVE → THINK → ACT → VERIFY loop with hybrid perception:
