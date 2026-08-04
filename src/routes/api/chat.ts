@@ -424,8 +424,8 @@ const result = streamText({
  model,
  system: SYSTEM_PROMPT,
  messages: await convertToModelMessages(body.messages as UIMessage[]),
- stopWhen: stepCountIs(20),
- maxRetries: 3,
+ stopWhen: stepCountIs(50),
+ maxRetries: 5,
  abortSignal: AbortSignal.timeout(300_000), // 5 min — must stay well above callCompanion's per-call timeout (45s default) since a plan can involve many sequential browser round-trips
  prepareStep: async ({ stepNumber }) => {
    if (stepNumber > 0) await new Promise((r) => setTimeout(r, 4300));
