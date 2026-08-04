@@ -664,7 +664,7 @@ const result = streamText({
                 try {
                   if (!userId) return { ok: false, error: "Not authenticated." };
                   await requirePermission(supabaseAdmin, userId, "browser:use");
-                  const r = await fetchUrl(url);
+                  const r = await withRetry(`fetch_url ${url}`, () => fetchUrl(url));
                   return {
                     ok: r.ok, status: r.status, finalUrl: r.finalUrl,
                     title: r.title, contentType: r.contentType, text: r.text,
@@ -906,7 +906,7 @@ const result = streamText({
                   ]);
                   const [vmState, page] = await Promise.all([
                     ensureVM(supabaseAdmin, userId, sessionId),
-                    fetchUrl(url),
+                    withRetry(`vm_browse ${url}`, () => fetchUrl(url)),
                   ]);
                   if (!page.ok) return { ok: false, status: page.status, error: `Page returned ${page.status}` };
                   const snapshot = [`# ${page.title || url}`, "", `Source: ${url}`, "", page.text ?? "", "", "## Links", ...page.links.slice(0, 30).map((link) => `- ${link}`)].join("\n");
