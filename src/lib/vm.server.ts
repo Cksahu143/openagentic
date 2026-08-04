@@ -563,12 +563,186 @@ export async function vmExecuteCommand(
     }
 
     case "apps":
-      output = `Installed apps:\n${state.installedApps.map((a) => `  • ${a}`).join("\n")}`;
+      output = [
+        `Installed apps & packages (${state.installedApps.length}):`,
+        ...state.installedApps.map((a) => `  • ${a}${PACKAGE_REGISTRY[a] ? ` — ${PACKAGE_REGISTRY[a].description}` : ""}`),
+        "",
+        "Install more with: install <name>   (see: install --list)",
+      ].join("\n");
+      break;
+
+    // ── Package management ────────────────────────────────────
+    case "install":
+    case "apt":
+    case "apt-get":
+    case "brew":
+    case "npm":
+    case "pnpm":
+    case "yarn":
+    case "pip":
+    case "pip3": {
+      // Normalise `apt install x`, `npm i x`, `pip install x`, `install x`.
+      const verbs = new Set(["install", "i", "add", "-g", "--global", "get"]);
+      const names = args.filter((a) => !verbs.has(a) && !a.startsWith("-"));
+      if (args[0] === "--list" || args[0] === "list" || (name === "install" && args.length === 0)) {
+        output = [
+          "Available packages:",
+          ...Object.entries(PACKAGE_REGISTRY).map(
+            ([id, p]) => `  ${id.padEnd(14)} ${p.description}`,
+          ),
+          "",
+          "Usage: install <name> [more names...]",
+        ].join("\n");
+        break;
+      }
+      if (names.length === 0) {
+        output = `${name}: nothing to install. Try 'install --list'.`;
+        break;
+      }
+      const installed = new Set(state.installedApps);
+      const lines: string[] = [];
+      for (const pkg of names) {
+        const entry = PACKAGE_REGISTRY[pkg];
+        if (!entry) {
+          // Unknown package: still record it so the agent can track intent.
+          installed.add(pkg);
+          lines.push(`Fetching ${pkg} ... done (generic package, no built-in runtime shim)`);
+          continue;
+        }
+        for (const dep of entry.provides) installed.add(dep);
+        installed.add(pkg);
+        lines.push(`Fetching ${pkg} ${entry.version} ... unpacking ... configuring ... done`);
+        if (entry.provides.length > 1) lines.push(`  provides: ${entry.provides.join(", ")}`);
+      }
+      const apps = Array.from(installed);
+      state.installedApps = apps;
+      await saveVMState(supabase, vmId, { installedApps: apps });
+      lines.push(`\n${names.length} package(s) installed. ${apps.length} total available.`);
+      output = lines.join("\n");
+      break;
+    }
+
+    case "uninstall":
+    case "remove": {
+      const target = args[0];
+      if (!target) {
+        output = "uninstall: missing package name";
+        break;
+      }
+      const apps = state.installedApps.filter((a) => a !== target);
+      state.installedApps = apps;
+      await saveVMState(supabase, vmId, { installedApps: apps });
+      output = `Removed ${target}.`;
+      break;
+    }
+
+    case "open": {
+      const target = args[0];
+      if (!target) {
+        output = `open: which app? Installed: ${state.installedApps.join(", ")}`;
+        break;
+      }
+      if (!state.installedApps.includes(target)) {
+        output = `open: ${target} is not installed. Run: install ${target}`;
+        break;
+      }
+      const meta = APP_REGISTRY[target] ?? PACKAGE_REGISTRY[target];
+      const rest = args.slice(1).join(" ");
+      output = [
+        `\x1b[32m▸ Launching ${target}\x1b[0m${rest ? ` with ${rest}` : ""}`,
+        meta ? `  ${"name" in meta ? meta.name : target}: ${meta.description}` : "",
+        `  Window opened on the agent desktop. Interact via its tools/commands.`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      break;
+    }
+
+    case "node":
+    case "nodejs":
+    case "bun":
+    case "deno": {
+      if (!state.installedApps.includes(name) && !state.installedApps.includes("node")) {
+        output = `${name}: command not found. Install it first: install ${name}`;
+        break;
+      }
+      const arg = args[0];
+      if (!arg) {
+        output = `${name} v22.11.0 — pass a script path or use: ${name} -e "<code>"`;
+        break;
+      }
+      const code =
+        arg === "-e" || arg === "--eval"
+          ? args.slice(1).join(" ")
+          : (vmReadFile(fs, arg).content ?? "");
+      if (!code) {
+        output = `${name}: cannot find module '${arg}'`;
+        break;
+      }
+      const res = await runJs(code);
+      output = res.ok
+        ? [...res.logs, res.result ? `=> ${res.result}` : ""].filter(Boolean).join("\n")
+        : res.error ?? "execution error";
+      break;
+    }
+
+    case "python":
+    case "python3": {
+      if (!state.installedApps.some((a) => a === "python" || a === "python3")) {
+        output = "python3: command not found. Install it first: install python3";
+        break;
+      }
+      output =
+        "python3: the in-VM interpreter runs through the Python service. Use the delegate_to_python_agent tool for Python execution.";
+      break;
+    }
+
+    case "git": {
+      if (!state.installedApps.includes("git")) {
+        output = "git: command not found. Install it first: install git";
+        break;
+      }
+      const sub = args[0] ?? "status";
+      output =
+        sub === "status"
+          ? "On branch main\nnothing to commit, working tree clean"
+          : sub === "init"
+            ? `Initialized empty Git repository in ${cwd}/.git/`
+            : sub === "log"
+              ? "commit (no history yet)"
+              : `git ${sub}: recorded in the agent workspace.`;
+      break;
+    }
+
+    case "ps":
+      output = [
+        "  PID  APP              STATUS",
+        ...state.installedApps.map((a, i) => `  ${String(100 + i).padEnd(4)} ${a.padEnd(16)} ready`),
+      ].join("\n");
+      break;
+
+    case "env":
+      output = [
+        "HOME=/home/agent",
+        "USER=agent",
+        `PWD=${cwd}`,
+        "SHELL=/bin/openagent-sh",
+        `PATH=/usr/local/bin:/usr/bin:/bin`,
+        `INSTALLED=${state.installedApps.join(":")}`,
+      ].join("\n");
       break;
 
     case "which": {
-      const known = new Set(["pwd", "ls", "cd", "cat", "echo", "mkdir", "touch", "rm", "cp", "mv", "write", "head", "tail", "wc", "date", "whoami", "uname", "clear", "help", "neofetch", "tree", "find", "grep", "apps", "run", "runfile", "preview", "profile"]);
-      output = args[0] && known.has(args[0]) ? `/usr/bin/${args[0]}` : "";
+      const known = new Set([
+        "pwd", "ls", "cd", "cat", "echo", "mkdir", "touch", "rm", "cp", "mv", "write", "head",
+        "tail", "wc", "date", "whoami", "uname", "clear", "help", "neofetch", "tree", "find",
+        "grep", "apps", "run", "runfile", "preview", "profile", "install", "uninstall", "open",
+        "ps", "env", "stat",
+      ]);
+      const target = args[0] ?? "";
+      output = known.has(target) || state.installedApps.includes(target)
+        ? `/usr/bin/${target}`
+        : "";
       break;
     }
 
