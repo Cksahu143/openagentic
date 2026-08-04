@@ -242,19 +242,24 @@ function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
  * order, skipping cooled-down ones, until a probe succeeds. Returns the
  * first working model or null if everything is unavailable.
  */
-export async function resolveFreeModel(
+async function buildCandidates(
   keys: ResolvedKeys,
-): Promise<ProviderResult | null> {
+  ignoreCooldowns: boolean,
+): Promise<ProviderResult[]> {
   const candidates: ProviderResult[] = [];
+  const down = (key: string) => !ignoreCooldowns && isCoolingDown(key);
 
   // 1. OpenRouter: include the complete live catalog, not an arbitrary slice.
   if (keys.openrouterKey) {
     const provider = createOpenRouterProvider(keys.openrouterKey);
-    const { availableFreeModels, markModelDown } = await import(
+    const { availableFreeModels, listFreeModels, markModelDown } = await import(
       "./openrouter-models.server"
     );
-    for (const modelId of await availableFreeModels(keys.openrouterKey)) {
-      if (isCoolingDown(`openrouter:${modelId}`)) continue;
+    const ids = ignoreCooldowns
+      ? await listFreeModels(keys.openrouterKey)
+      : await availableFreeModels(keys.openrouterKey);
+    for (const modelId of ids) {
+      if (down(`openrouter:${modelId}`)) continue;
       candidates.push({
         model: provider(modelId),
         label: `openrouter:${modelId}`,
@@ -272,7 +277,7 @@ export async function resolveFreeModel(
   if (keys.groqKey) {
     const provider = createGroqProvider(keys.groqKey);
     for (const modelId of GROQ_MODELS) {
-      if (isCoolingDown(`groq:${modelId}`)) continue;
+      if (down(`groq:${modelId}`)) continue;
       candidates.push({ model: provider(modelId), label: `groq:${modelId}`, provider: "groq", modelId, markDown: (e) => markProviderDown("groq", modelId, e) });
     }
   }
@@ -281,7 +286,7 @@ export async function resolveFreeModel(
   if (keys.geminiKey) {
     const provider = createGoogleGenerativeAI({ apiKey: keys.geminiKey });
     for (const modelId of GEMINI_MODELS) {
-      if (isCoolingDown(`gemini:${modelId}`)) continue;
+      if (down(`gemini:${modelId}`)) continue;
       candidates.push({ model: provider(modelId), label: `gemini:${modelId}`, provider: "gemini", modelId, markDown: (e) => markProviderDown("gemini", modelId, e) });
     }
   }
@@ -290,9 +295,27 @@ export async function resolveFreeModel(
   if (keys.cerebrasKey) {
     const provider = createCerebrasProvider(keys.cerebrasKey);
     for (const modelId of CEREBRAS_MODELS) {
-      if (isCoolingDown(`cerebras:${modelId}`)) continue;
+      if (down(`cerebras:${modelId}`)) continue;
       candidates.push({ model: provider(modelId), label: `cerebras:${modelId}`, provider: "cerebras", modelId, markDown: (e) => markProviderDown("cerebras", modelId, e) });
     }
+  }
+
+  return candidates;
+}
+
+/**
+ * Resolve the best available free model. Returns a single model that walks
+ * the whole rotation and wraps back to the first model after the last one
+ * runs out of credits or gets rate limited.
+ */
+export async function resolveFreeModel(
+  keys: ResolvedKeys,
+): Promise<ProviderResult | null> {
+  let candidates = await buildCandidates(keys, false);
+  if (candidates.length === 0) {
+    // Everything is cooling down — wrap around and start from the top again.
+    clearCooldowns();
+    candidates = await buildCandidates(keys, true);
   }
 
   const first = candidates[0];
