@@ -127,3 +127,33 @@
 - `src/routes/_authenticated/workspace.tsx` — new live panels.
 - `docs/ARCHITECTURE.md` — Perception & Session sections.
 - `MASTER_ROADMAP.md` — M9 completion note.
+
+## Free-model reliability & quota fix
+
+Root causes found by live-testing the OpenRouter catalog:
+1. **Request amplification.** OpenRouter's free tier is capped by *request
+   count* (50/day/key), not tokens. A 50-step agent loop, with `maxRetries: 5`
+   and a rotation that swept all 13 free models across 3 cycles, could issue
+   hundreds of requests for one message — the day's budget vanished instantly.
+2. **The agent "did nothing."** The old ranking preferred `nvidia/*` models;
+   live probes show `nemotron-3-nano-30b`, `nemotron-nano-9b`, `nemotron-3-super-120b`
+   and `nemotron-nano-12b-vl` advertise `tools` but answer in prose and never
+   emit tool calls. The stale static list (`meta-llama`, `qwen`, `mistralai`,
+   `deepseek` `:free`) no longer exists in the catalog at all.
+
+Fixes:
+- Blocklisted the models that don't really emit tool calls; re-ranked the
+  catalog by verified tool-calling probes (gpt-oss-20b, ling-3.0-flash,
+  laguna-s-2.1, north-mini-code, nemotron-3-ultra all verified working with
+  the full 25-tool OpenAgent payload).
+- Bounded rotation: max 3 model attempts per generation, single pass, no
+  cooldown-clearing re-sweeps.
+- Fatal errors (400/401/403/schema/context) abort immediately instead of
+  being retried on every model.
+- A key-wide daily-cap 429 now skips every OpenRouter model and jumps
+  straight to another provider.
+- Candidate ordering guarantees a non-OpenRouter provider is reachable
+  within the attempt budget.
+- Agent loop bounded to 14 steps (`OPENAGENT_MAX_STEPS`), `maxRetries: 0`,
+  sub-agents 8/4 steps, inter-step delay 4.3s → 1.2s.
+- Clear user-facing message when the 50/day free cap is hit.
