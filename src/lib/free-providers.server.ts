@@ -170,10 +170,16 @@ export interface ProviderResult {
   markDown: (error: unknown) => void;
 }
 
-/** How many times the rotation wraps back to the first model before giving up. */
-const ROTATION_CYCLES = 3;
-/** Pause before starting another cycle so rate-limited models can recover. */
-const CYCLE_PAUSE_MS = 1500;
+/**
+ * QUOTA BUDGET — OpenRouter's free tier is capped by REQUEST COUNT per day
+ * (50/day without purchased credits). Every fallback attempt is a request,
+ * so sweeping a 13-model catalog on each failure burned an entire day's
+ * budget in one agent turn. The rotation is therefore strictly bounded:
+ * at most a handful of models per generation, one pass, no re-sweeps.
+ */
+const MAX_ATTEMPTS_PER_CALL = 3;
+/** Small pause between attempts so a rate-limited provider can recover. */
+const ATTEMPT_PAUSE_MS = 350;
 
 function isTransient(error: unknown): boolean {
   const msg = errorText(error);
@@ -189,10 +195,30 @@ function isTransient(error: unknown): boolean {
 }
 
 /**
- * Wraps the whole candidate list into one model that walks the rotation.
- * When the LAST model fails (credits gone or rate limited) it wraps around
- * to the FIRST model again — cooldowns are cleared between cycles so the
- * rotation is a true loop rather than a one-shot pass.
+ * Errors that will fail identically on every model — bad request bodies,
+ * unsupported tool schemas, auth problems. Rotating on these wastes the
+ * daily request budget without any chance of succeeding, so we stop at once.
+ */
+function isFatalForAllModels(error: unknown): boolean {
+  const msg = errorText(error);
+  if (isTransient(error)) return false;
+  return (
+    msg.includes("401") ||
+    msg.includes("403") ||
+    msg.includes("unauthorized") ||
+    msg.includes("invalid api key") ||
+    msg.includes("400") ||
+    msg.includes("invalid_request") ||
+    msg.includes("schema") ||
+    msg.includes("context length") ||
+    msg.includes("too many tokens")
+  );
+}
+
+/**
+ * Wraps the candidate list into one model that walks a BOUNDED rotation:
+ * at most `MAX_ATTEMPTS_PER_CALL` models per generation, single pass,
+ * aborting immediately on errors that every model would reject.
  */
 function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
   const models = candidates.map((candidate) => ({
@@ -204,25 +230,43 @@ function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
 
   async function attempt<T>(run: (model: LanguageModelV3) => PromiseLike<T>): Promise<T> {
     let lastError: unknown;
-    for (let cycle = 0; cycle < ROTATION_CYCLES; cycle++) {
-      if (cycle > 0) {
-        // Full loop completed — wrap around to the first model again.
-        clearCooldowns();
-        const { clearModelCooldowns } = await import("./openrouter-models.server");
-        clearModelCooldowns();
-        await new Promise((r) => setTimeout(r, CYCLE_PAUSE_MS * cycle));
-        console.warn(`[providers] rotation cycle ${cycle + 1}/${ROTATION_CYCLES} — restarting at the first free model`);
-      }
-      for (const { candidate, model } of models) {
-        try {
-          return await run(model);
-        } catch (error) {
-          candidate.markDown(error);
-          lastError = error;
+    let tried = 0;
+    for (const { candidate, model } of models) {
+      if (tried >= MAX_ATTEMPTS_PER_CALL) break;
+      tried++;
+      try {
+        return await run(model);
+      } catch (error) {
+        lastError = error;
+        if (isFatalForAllModels(error)) {
+          console.error(
+            `[providers] fatal request error on ${candidate.label} — not rotating:`,
+            errorText(error).slice(0, 300),
+          );
+          throw error;
+        }
+        candidate.markDown(error);
+        // A key-wide daily cap means every OpenRouter model is unusable —
+        // skip straight past them instead of spending more requests.
+        const { isDailyFreeCapError } = await import("./openrouter-models.server");
+        if (candidate.provider === "openrouter" && isDailyFreeCapError(error)) {
+          console.warn("[providers] OpenRouter daily free-request cap reached — skipping to other providers");
+          for (const other of models) {
+            if (other.candidate.provider === "openrouter") other.candidate.markDown(error);
+          }
+          const next = models.find((m) => m.candidate.provider !== "openrouter");
+          if (!next) throw error;
+          try {
+            return await run(next.model);
+          } catch (e) {
+            next.candidate.markDown(e);
+            throw e;
+          }
+        }
+        if (tried < MAX_ATTEMPTS_PER_CALL) {
+          await new Promise((r) => setTimeout(r, ATTEMPT_PAUSE_MS));
         }
       }
-      // Only keep cycling while failures look recoverable.
-      if (!isTransient(lastError) && cycle >= 1) break;
     }
     throw lastError ?? new Error("Every free model failed");
   }
@@ -236,6 +280,7 @@ function fallbackLanguageModel(candidates: ProviderResult[]): LanguageModel {
     doStream: (options) => attempt((model) => model.doStream(options)),
   } satisfies LanguageModelV3;
 }
+
 
 /**
  * Resolve the best available free model. Tries each provider/model in
