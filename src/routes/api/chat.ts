@@ -446,11 +446,15 @@ const result = streamText({
  model,
  system: SYSTEM_PROMPT,
  messages: await convertToModelMessages(body.messages as UIMessage[]),
- stopWhen: stepCountIs(50),
- maxRetries: 5,
+ // REQUEST BUDGET: every step is one API request against a free tier that
+ // is capped by request COUNT per day. 50-step loops drained a whole day's
+ // budget in a single message, so the loop is bounded and the model layer
+ // (free-providers.server) owns rotation instead of blind SDK retries.
+ stopWhen: stepCountIs(Number(process.env.OPENAGENT_MAX_STEPS ?? 14)),
+ maxRetries: 0,
  abortSignal: AbortSignal.timeout(300_000), // 5 min — must stay well above callCompanion's per-call timeout (45s default) since a plan can involve many sequential browser round-trips
  prepareStep: async ({ stepNumber }) => {
-   if (stepNumber > 0) await new Promise((r) => setTimeout(r, 4300));
+   if (stepNumber > 0) await new Promise((r) => setTimeout(r, 1200));
    return {};
  },
  // Don't hard-exclude Darkbloom — for this free model it may be the only
@@ -1049,8 +1053,8 @@ const result = streamText({
                     system: `You are ${name}, a specialized sub-agent of OpenAgent. Goal: ${goal}. You have a virtual computer with these apps: ${apps.join(", ")}. Complete your task efficiently using only the tools provided. Keep responses concise.`,
                     prompt: goal,
                     tools: subTools as any,
-                    stopWhen: stepCountIs(50),
-                    maxRetries: 2,
+                    stopWhen: stepCountIs(8),
+                    maxRetries: 0,
                     abortSignal: AbortSignal.timeout(120_000),
                   });
                   let text = "";
@@ -1113,8 +1117,8 @@ const result = streamText({
                     model,
                     system: `You are ${subAgent.name}, a specialized sub-agent of OpenAgent. Original goal: ${subAgent.goal}. The user is sending you a follow-up instruction. Respond and complete the task.`,
                     prompt: message,
-                    stopWhen: stepCountIs(5),
-                    maxRetries: 2,
+                    stopWhen: stepCountIs(4),
+                    maxRetries: 0,
                     abortSignal: AbortSignal.timeout(60_000),
                   });
                   let text = "";
@@ -1328,8 +1332,11 @@ return result.toUIMessageStreamResponse({
     if (/api key not valid|invalid_api_key|permission_denied|401|403/i.test(raw)) {
       return "⚠️ API key rejected. Check the provider key secret is set and current.";
     }
+    if (/free-models-per-day|add 10 credits/i.test(raw)) {
+      return "⚠️ OpenRouter's free tier allows only 50 requests per day per key and that limit is now reached. Add another free key on the Providers page (Gemini/Groq/Cerebras all have separate quotas), or wait for the daily reset.";
+    }
     if (/429|rate.?limit/i.test(raw)) {
-      return "⚠️ Rate limited. Wait a moment and retry.";
+      return "⚠️ Rate limited by the free model provider. Wait a moment and retry — OpenAgent already rotated across the available free models.";
     }
     if (/503|unavailable|overloaded/i.test(raw)) {
       return "⚠️ Provider temporarily overloaded. Retry in a moment.";
