@@ -1,10 +1,17 @@
 /**
  * OpenRouter free-model rotation (server-only).
  *
- * Discovers EVERY free model on OpenRouter (pricing prompt+completion == 0)
- * that supports tool calling, orders them by capability, and rotates through
- * them: any model that errors / rate-limits / runs out of free quota is put
- * on a cooldown so subsequent requests skip straight to the next one.
+ * Discovers every free model on OpenRouter (`:free`, zero prompt+completion
+ * pricing) that advertises tool calling, filters out models that are known
+ * NOT to emit real tool calls, orders them by measured reliability, and
+ * rotates through them with cooldowns.
+ *
+ * IMPORTANT — quota model: OpenRouter's free tier is limited by REQUEST
+ * COUNT per day (50/day without purchased credits), not by tokens. Every
+ * model attempt — including a fallback attempt after another model failed —
+ * burns one request. So the rotation must be *frugal*: try a small number of
+ * models per call, never sweep the whole catalog, and never re-sweep it in
+ * multiple "cycles".
  *
  * Do not import this file from client code.
  */
@@ -18,24 +25,40 @@ interface OpenRouterModel {
 }
 
 const MODELS_URL = "https://openrouter.ai/api/v1/models";
-const CACHE_TTL_MS = 30 * 60 * 1000; // model catalog changes rarely
-const DEFAULT_COOLDOWN_MS = 10 * 60 * 1000; // model failed → skip for 10 min
-const QUOTA_COOLDOWN_MS = 60 * 60 * 1000; // out of free credits → skip 1 hour
+const CACHE_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_COOLDOWN_MS = 10 * 60 * 1000;
+const QUOTA_COOLDOWN_MS = 60 * 60 * 1000;
 
-/** Fallback list used only when the catalog fetch itself fails. */
-const STATIC_FALLBACK = [
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "qwen/qwen3-coder:free",
+/**
+ * Models that advertise `tools` but, in live testing, answer in prose
+ * instead of emitting tool calls. An agent loop on these models burns the
+ * daily request budget without ever acting, so they are excluded.
+ */
+const NO_REAL_TOOL_CALLS = [
   "nvidia/nemotron-3-nano-30b-a3b:free",
-  "mistralai/mistral-small-3.2-24b-instruct:free",
-  "google/gemma-3-27b-it:free",
+  "nvidia/nemotron-nano-9b-v2:free",
+  "nvidia/nemotron-3-super-120b-a12b:free",
+  "nvidia/nemotron-nano-12b-v2-vl:free",
+  "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 ];
 
 /**
- * Vendors that historically produce clean tool-calling output on the free
- * tier get sorted first; everything else follows by context length.
+ * Preference order, verified by live tool-calling probes. Anything not
+ * listed still gets used, just after these.
  */
-const VENDOR_RANK = ["meta-llama/", "qwen/", "mistralai/", "deepseek/", "nvidia/", "google/"];
+const PREFERRED = [
+  "openai/gpt-oss-20b:free",
+  "inclusionai/ling-3.0-flash:free",
+  "poolside/laguna-s-2.1:free",
+  "cohere/north-mini-code:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "poolside/laguna-xs-2.1:free",
+  "google/gemma-4-31b-it:free",
+  "google/gemma-4-26b-a4b-it:free",
+];
+
+/** Used only when the catalog fetch itself fails. */
+const STATIC_FALLBACK = PREFERRED.slice(0, 4);
 
 let catalogCache: { at: number; ids: string[] } | null = null;
 const cooldowns = new Map<string, number>();
@@ -51,11 +74,11 @@ function supportsTools(m: OpenRouterModel): boolean {
 }
 
 function rankOf(id: string): number {
-  const i = VENDOR_RANK.findIndex((v) => id.startsWith(v));
-  return i === -1 ? VENDOR_RANK.length : i;
+  const i = PREFERRED.indexOf(id);
+  return i === -1 ? PREFERRED.length : i;
 }
 
-/** All free tool-capable model ids, best-first. Cached in-process. */
+/** All free, tool-capable, non-blocklisted model ids, best-first. */
 export async function listFreeModels(apiKey: string): Promise<string[]> {
   const now = Date.now();
   if (catalogCache && now - catalogCache.at < CACHE_TTL_MS) return catalogCache.ids;
@@ -67,8 +90,8 @@ export async function listFreeModels(apiKey: string): Promise<string[]> {
     });
     if (!res.ok) throw new Error(`catalog ${res.status}`);
     const json = (await res.json()) as { data?: OpenRouterModel[] };
-    const models = (json.data ?? []).filter((m) => isFree(m) && supportsTools(m));
-    const ids = models
+    const ids = (json.data ?? [])
+      .filter((m) => isFree(m) && supportsTools(m) && !NO_REAL_TOOL_CALLS.includes(m.id))
       .sort((a, b) => {
         const r = rankOf(a.id) - rankOf(b.id);
         if (r !== 0) return r;
@@ -90,13 +113,7 @@ export async function availableFreeModels(apiKey: string): Promise<string[]> {
   const all = await listFreeModels(apiKey);
   const now = Date.now();
   const up = all.filter((id) => (cooldowns.get(id) ?? 0) <= now);
-  // If literally everything is cooling down, clear the map and retry them all
-  // rather than hard-failing the request.
-  if (up.length === 0) {
-    cooldowns.clear();
-    return all;
-  }
-  return up;
+  return up.length > 0 ? up : all;
 }
 
 /** Mark a model unusable for a while. Longer for quota/credit exhaustion. */
@@ -106,7 +123,8 @@ export function markModelDown(id: string, reason?: unknown): void {
     msg.includes("402") ||
     msg.includes("credit") ||
     msg.includes("quota") ||
-    msg.includes("insufficient");
+    msg.includes("insufficient") ||
+    msg.includes("daily limit");
   cooldowns.set(id, Date.now() + (quota ? QUOTA_COOLDOWN_MS : DEFAULT_COOLDOWN_MS));
   console.warn(`[openrouter] ${id} on cooldown (${quota ? "quota" : "error"}): ${msg.slice(0, 200)}`);
 }
@@ -114,7 +132,7 @@ export function markModelDown(id: string, reason?: unknown): void {
 /** Forget every cooldown so the rotation wraps back to the first model. */
 export function clearModelCooldowns(): void {
   if (cooldowns.size > 0) {
-    console.warn(`[openrouter] cycling rotation — clearing ${cooldowns.size} cooldown(s)`);
+    console.warn(`[openrouter] clearing ${cooldowns.size} cooldown(s)`);
     cooldowns.clear();
   }
 }
@@ -124,4 +142,17 @@ export function cooldownSnapshot(): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [id, until] of cooldowns) if (until > now) out[id] = Math.round((until - now) / 1000);
   return out;
+}
+
+/**
+ * True when the whole OpenRouter key has hit its daily free-request cap.
+ * OpenRouter reports this as a 429 mentioning "free-models-per-day".
+ */
+export function isDailyFreeCapError(reason: unknown): boolean {
+  const msg = (reason instanceof Error ? reason.message : String(reason ?? "")).toLowerCase();
+  return (
+    msg.includes("free-models-per-day") ||
+    msg.includes("daily limit") ||
+    (msg.includes("429") && msg.includes("add 10 credits"))
+  );
 }
