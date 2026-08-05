@@ -349,9 +349,21 @@ async function buildCandidates(
 }
 
 /**
+ * Order candidates so the bounded rotation actually reaches a *different
+ * provider* before it gives up: two best OpenRouter models first, then the
+ * best non-OpenRouter model (Gemini/Groq/Cerebras, which have their own,
+ * separate quotas), then everything else.
+ */
+function orderForRotation(candidates: ProviderResult[]): ProviderResult[] {
+  const or = candidates.filter((c) => c.provider === "openrouter");
+  const other = candidates.filter((c) => c.provider !== "openrouter");
+  if (or.length === 0 || other.length === 0) return candidates;
+  return [...or.slice(0, 2), ...other.slice(0, 1), ...or.slice(2), ...other.slice(1)];
+}
+
+/**
  * Resolve the best available free model. Returns a single model that walks
- * the whole rotation and wraps back to the first model after the last one
- * runs out of credits or gets rate limited.
+ * a bounded rotation (a few models per generation) across providers.
  */
 export async function resolveFreeModel(
   keys: ResolvedKeys,
@@ -362,6 +374,7 @@ export async function resolveFreeModel(
     clearCooldowns();
     candidates = await buildCandidates(keys, true);
   }
+  candidates = orderForRotation(candidates);
 
   const first = candidates[0];
   if (!first) return null;
@@ -371,6 +384,7 @@ export async function resolveFreeModel(
     label: `${first.label} (+${candidates.length - 1} fallbacks)`,
   };
 }
+
 
 export function noProviderError(): string {
   return "No free AI model is currently available. Add an OpenRouter key on Providers, or wait for cooled-down free models to recover.";
