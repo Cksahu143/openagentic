@@ -92,9 +92,16 @@ function Providers() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="openrouter">OpenRouter (free models)</SelectItem>
+                    <SelectItem value="groq">Groq (free tier)</SelectItem>
+                    <SelectItem value="cerebras">Cerebras (free tier)</SelectItem>
+                    <SelectItem value="google">Google AI Studio (free tier)</SelectItem>
+                    <SelectItem value="mistral">Mistral (free tier)</SelectItem>
+                    <SelectItem value="nvidia">NVIDIA NIM (free tier)</SelectItem>
+                    <SelectItem value="github">GitHub Models (free tier)</SelectItem>
+                    <SelectItem value="together">Together.ai (free models)</SelectItem>
                     <SelectItem value="openai">OpenAI</SelectItem>
                     <SelectItem value="anthropic">Anthropic</SelectItem>
-                    <SelectItem value="openrouter">OpenRouter</SelectItem>
                     <SelectItem value="custom">Custom (OpenAI-compatible)</SelectItem>
                   </SelectContent>
                 </Select>
