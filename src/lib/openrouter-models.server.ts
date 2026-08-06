@@ -66,7 +66,10 @@ const cooldowns = new Map<string, number>();
 function isFree(m: OpenRouterModel): boolean {
   const p = m.pricing ?? {};
   const zero = (v?: string) => v === undefined || Number(v) === 0;
-  return zero(p.prompt) && zero(p.completion) && m.id.endsWith(":free");
+  // Any zero-priced model counts — not only the ones whose id ends in
+  // ":free". OpenRouter also lists permanently free variants without the
+  // suffix, and excluding them shrank the rotation for no reason.
+  return zero(p.prompt) && zero(p.completion);
 }
 
 function supportsTools(m: OpenRouterModel): boolean {
