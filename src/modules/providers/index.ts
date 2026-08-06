@@ -17,6 +17,10 @@ export type ProviderName =
   | "groq"
   | "cerebras"
   | "google"
+  | "mistral"
+  | "nvidia"
+  | "github"
+  | "together"
   | "custom";
 
 export interface ProviderKey {
