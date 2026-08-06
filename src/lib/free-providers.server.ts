@@ -37,6 +37,42 @@ export function createCerebrasProvider(apiKey: string) {
   });
 }
 
+/** Mistral's free "La Plateforme" tier — OpenAI-compatible, tool-capable. */
+export function createMistralProvider(apiKey: string) {
+  return createOpenAICompatible({
+    name: "mistral",
+    baseURL: "https://api.mistral.ai/v1",
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+}
+
+/** NVIDIA NIM free developer tier — OpenAI-compatible. */
+export function createNvidiaProvider(apiKey: string) {
+  return createOpenAICompatible({
+    name: "nvidia",
+    baseURL: "https://integrate.api.nvidia.com/v1",
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+}
+
+/** GitHub Models free tier (uses a GitHub PAT). */
+export function createGithubProvider(apiKey: string) {
+  return createOpenAICompatible({
+    name: "github",
+    baseURL: "https://models.github.ai/inference",
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+}
+
+/** Together.ai free endpoints. */
+export function createTogetherProvider(apiKey: string) {
+  return createOpenAICompatible({
+    name: "together",
+    baseURL: "https://api.together.xyz/v1",
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+}
+
 export { createGoogleProvider, createOpenRouterProvider };
 
 // ── Model catalogs ───────────────────────────────────────────
@@ -44,16 +80,23 @@ export { createGoogleProvider, createOpenRouterProvider };
 /** Groq free-tier models with tool support, ranked by capability. */
 export const GROQ_MODELS = [
   "llama-3.3-70b-versatile",
+  "moonshotai/kimi-k2-instruct",
   "qwen/qwen3-32b",
-  "llama-3.1-8b-instant",
-  "deepseek-r1-distill-llama-70b",
   "openai/gpt-oss-120b",
   "openai/gpt-oss-20b",
+  "llama-3.1-8b-instant",
+  "deepseek-r1-distill-llama-70b",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+  "gemma2-9b-it",
 ];
 
 /** Cerebras free-tier models with tool support. */
 export const CEREBRAS_MODELS = [
   "llama-3.3-70b",
+  "qwen-3-32b",
+  "qwen-3-coder-480b",
+  "gpt-oss-120b",
   "qwen-2.5-coder-32b",
   "llama3.1-8b",
 ];
@@ -61,8 +104,42 @@ export const CEREBRAS_MODELS = [
 /** Google Gemini free-tier models. */
 export const GEMINI_MODELS = [
   "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
   "gemini-2.0-flash",
   "gemini-2.0-flash-lite",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
+];
+
+/** Mistral free-tier models with tool support. */
+export const MISTRAL_MODELS = [
+  "mistral-large-latest",
+  "mistral-medium-latest",
+  "mistral-small-latest",
+  "open-mistral-nemo",
+  "codestral-latest",
+];
+
+/** NVIDIA NIM free developer-tier models with tool support. */
+export const NVIDIA_MODELS = [
+  "meta/llama-3.3-70b-instruct",
+  "qwen/qwen2.5-coder-32b-instruct",
+  "deepseek-ai/deepseek-r1",
+  "mistralai/mistral-small-24b-instruct",
+];
+
+/** GitHub Models free-tier ids. */
+export const GITHUB_MODELS = [
+  "openai/gpt-4o-mini",
+  "openai/gpt-4.1-mini",
+  "meta/Llama-3.3-70B-Instruct",
+  "mistral-ai/Mistral-Small-2503",
+];
+
+/** Together.ai free endpoints. */
+export const TOGETHER_MODELS = [
+  "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+  "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo-Free",
 ];
 
 // ── Cooldown tracking ────────────────────────────────────────
