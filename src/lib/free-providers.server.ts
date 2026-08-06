@@ -458,6 +458,29 @@ async function buildCandidates(
     }
   }
 
+  // 5. Additional free tiers — each only when its key exists.
+  const extra: Array<[string | null, (k: string) => (id: string) => LanguageModel, string[], string]> = [
+    [keys.mistralKey, createMistralProvider, MISTRAL_MODELS, "mistral"],
+    [keys.nvidiaKey, createNvidiaProvider, NVIDIA_MODELS, "nvidia"],
+    [keys.githubKey, createGithubProvider, GITHUB_MODELS, "github"],
+    [keys.togetherKey, createTogetherProvider, TOGETHER_MODELS, "together"],
+  ];
+  for (const [key, factory, ids, name] of extra) {
+    if (!key) continue;
+    const provider = factory(key);
+    for (const modelId of ids) {
+      if (down(`${name}:${modelId}`)) continue;
+      candidates.push({
+        model: provider(modelId),
+        label: `${name}:${modelId}`,
+        provider: name,
+        modelId,
+        markDown: (e) => markProviderDown(name, modelId, e),
+      });
+    }
+  }
+
+
   return candidates;
 }
 
