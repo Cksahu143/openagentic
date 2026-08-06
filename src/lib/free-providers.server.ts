@@ -201,15 +201,41 @@ export interface ResolvedKeys {
   geminiKey: string | null;
   openrouterKey: string | null;
   cerebrasKey: string | null;
+  mistralKey: string | null;
+  nvidiaKey: string | null;
+  githubKey: string | null;
+  togetherKey: string | null;
 }
+
+/** Providers whose keys can come from either the user's row or the env. */
+const KEYED_PROVIDERS = [
+  "groq",
+  "openrouter",
+  "cerebras",
+  "mistral",
+  "nvidia",
+  "github",
+  "together",
+  "google",
+] as const;
+
+const ENV_VARS: Record<string, string[]> = {
+  groq: ["GROQ_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  cerebras: ["CEREBRAS_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+  nvidia: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
+  github: ["GITHUB_MODELS_TOKEN", "GITHUB_TOKEN"],
+  together: ["TOGETHER_API_KEY"],
+  google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY"],
+};
 
 export async function resolveKeys(
   userId: string | null,
   supabaseAdmin: import("@supabase/supabase-js").SupabaseClient,
 ): Promise<ResolvedKeys> {
-  let groqKey: string | null = null;
-  let openrouterKey: string | null = null;
-  let cerebrasKey: string | null = null;
+  const found: Record<string, string | null> = {};
+  for (const p of KEYED_PROVIDERS) found[p] = null;
 
   if (userId) {
     const { data: keys } = await supabaseAdmin
@@ -220,21 +246,31 @@ export async function resolveKeys(
       .order("created_at", { ascending: false });
 
     for (const k of keys ?? []) {
-      if (k.provider === "groq" && !groqKey) groqKey = k.api_key;
-      if (k.provider === "openrouter" && !openrouterKey) openrouterKey = k.api_key;
-      if (k.provider === "cerebras" && !cerebrasKey) cerebrasKey = k.api_key;
+      if (k.provider in found && !found[k.provider]) found[k.provider] = k.api_key;
     }
   }
 
-  if (!groqKey && process.env.GROQ_API_KEY) groqKey = process.env.GROQ_API_KEY;
-  if (!openrouterKey && process.env.OPENROUTER_API_KEY)
-    openrouterKey = process.env.OPENROUTER_API_KEY;
-  if (!cerebrasKey && process.env.CEREBRAS_API_KEY)
-    cerebrasKey = process.env.CEREBRAS_API_KEY;
+  for (const p of KEYED_PROVIDERS) {
+    if (found[p]) continue;
+    for (const name of ENV_VARS[p] ?? []) {
+      const v = process.env[name];
+      if (v) {
+        found[p] = v;
+        break;
+      }
+    }
+  }
 
-  const geminiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? null;
-
-  return { groqKey, geminiKey, openrouterKey, cerebrasKey };
+  return {
+    groqKey: found.groq,
+    geminiKey: found.google,
+    openrouterKey: found.openrouter,
+    cerebrasKey: found.cerebras,
+    mistralKey: found.mistral,
+    nvidiaKey: found.nvidia,
+    githubKey: found.github,
+    togetherKey: found.together,
+  };
 }
 
 // ── Unified resolver ─────────────────────────────────────────
