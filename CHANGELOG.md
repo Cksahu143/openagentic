@@ -157,3 +157,10 @@ Fixes:
 - Agent loop bounded to 14 steps (`OPENAGENT_MAX_STEPS`), `maxRetries: 0`,
   sub-agents 8/4 steps, inter-step delay 4.3s → 1.2s.
 - Clear user-facing message when the 50/day free cap is hit.
+
+## VM apps + browser (unreleased)
+- `open`/`launch`/`start` now auto-install known apps and actually launch them; `open <url>` opens the VM browser.
+- New terminal commands: `browse`, `curl`, `wget` (reader-mode web fetch, snapshot saved to /home/agent/Downloads/browser-last.md).
+- New server fns: `browseInVirtualComputer`, `openVirtualComputerApp`.
+- New agent tool: `vm_open_app`.
+- Computer tab: app dock, tabbed Terminal / Browser / Preview panes, clickable links, HTML preview iframe.
