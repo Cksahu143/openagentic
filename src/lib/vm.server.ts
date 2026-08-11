@@ -277,6 +277,64 @@ export async function vmWriteFile(
   return { fs: newFs, ok: true };
 }
 
+/**
+ * The VM's web browser app. Fetches a public page, stores a readable
+ * snapshot in the VFS so both the agent and the user can re-open it, and
+ * returns terminal-friendly output.
+ */
+export async function vmBrowse(
+  supabase: SupabaseClient,
+  vmId: string,
+  state: VMState,
+  url: string,
+): Promise<{ fs: VFS; output: string; page: Awaited<ReturnType<typeof fetchUrl>> | null }> {
+  let page: Awaited<ReturnType<typeof fetchUrl>>;
+  try {
+    page = await fetchUrl(url);
+  } catch (e) {
+    return {
+      fs: state.fs,
+      output: `browse: ${url}: ${e instanceof Error ? e.message : String(e)}`,
+      page: null,
+    };
+  }
+
+  const snapshot = [
+    `# ${page.title || url}`,
+    "",
+    `Source: ${page.finalUrl} (HTTP ${page.status})`,
+    "",
+    page.text,
+    "",
+    "## Links",
+    ...page.links.slice(0, 40).map((l) => `- [${l.text}](${l.href})`),
+  ].join("\n");
+
+  const { fs } = await vmWriteFile(
+    supabase,
+    vmId,
+    state.fs,
+    "/home/agent/Downloads/browser-last.md",
+    snapshot,
+  );
+  state.fs = fs;
+
+  const output = [
+    `\x1b[32m▸ Web Browser\x1b[0m ${page.finalUrl} — HTTP ${page.status}`,
+    page.title ? `  title: ${page.title}` : "",
+    "",
+    page.text.slice(0, 2000) || "(no readable text)",
+    "",
+    `Saved snapshot → /home/agent/Downloads/browser-last.md (${page.links.length} links)`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return { fs, output, page };
+}
+
+
+
 export function vmReadFile(fs: VFS, path: string): { ok: boolean; content?: string; error?: string } {
   const full = normalizePath("/home/agent", path);
   const file = fs[full];
