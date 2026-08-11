@@ -925,6 +925,35 @@ const result = streamText({
                 }
               },
             }),
+            vm_open_app: tool({
+              description:
+                "Launch an app inside the virtual computer, auto-installing it first if needed. " +
+                "Apps: web-browser, editor, filesystem, code-runner, node, bun, deno, python3, typescript, git, curl, sqlite3, ffmpeg. " +
+                "Pass a URL as `arg` with app 'web-browser' to open a page.",
+              inputSchema: z.object({
+                app: z.string().min(1).max(60),
+                arg: z.string().max(500).optional(),
+              }),
+              execute: async ({ app, arg }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
+                  const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
+                  const result = await vmExecuteCommand(
+                    supabaseAdmin,
+                    vmState.id,
+                    vmState,
+                    `open ${app}${arg ? ` ${arg}` : ""}`,
+                  );
+                  await appendTimeline("🪟", `opened ${app}`, { app, arg: arg ?? null });
+                  return { ok: true, app, output: result.output };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+
+
 
             // --- Sub-Agents ---
             spawn_subagent: tool({
