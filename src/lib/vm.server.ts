@@ -669,19 +669,80 @@ export async function vmExecuteCommand(
       break;
     }
 
-    case "open": {
+    case "open":
+    case "launch":
+    case "start": {
       const target = args[0];
       if (!target) {
-        output = `open: which app? Installed: ${state.installedApps.join(", ")}`;
+        output = [
+          `open: which app? Installed: ${state.installedApps.join(", ")}`,
+          `Available to install: ${Object.keys(PACKAGE_REGISTRY).join(", ")}`,
+        ].join("\n");
         break;
       }
+      // A URL opens the browser directly: `open https://example.com`
+      if (/^https?:\/\//i.test(target)) {
+        const res = await vmBrowse(supabase, vmId, state, target);
+        newFs = res.fs;
+        output = res.output;
+        break;
+      }
+
+      const known = APP_REGISTRY[target] ?? PACKAGE_REGISTRY[target];
+      const autoLines: string[] = [];
       if (!state.installedApps.includes(target)) {
-        output = `open: ${target} is not installed. Run: install ${target}`;
+        if (!known) {
+          output = `open: ${target} is not an app. Run 'install --list' to see what's available.`;
+          break;
+        }
+        // Auto-install known apps instead of dead-ending the agent.
+        const installed = new Set(state.installedApps);
+        installed.add(target);
+        for (const dep of PACKAGE_REGISTRY[target]?.provides ?? []) installed.add(dep);
+        const apps = Array.from(installed);
+        state.installedApps = apps;
+        await saveVMState(supabase, vmId, { installedApps: apps });
+        autoLines.push(`Installing ${target} ... done`);
+      }
+
+      const rest = args.slice(1).join(" ");
+
+      // Apps that actually do something when launched.
+      if (target === "web-browser") {
+        if (rest) {
+          const url = /^https?:\/\//i.test(rest) ? rest : `https://${rest}`;
+          const res = await vmBrowse(supabase, vmId, state, url);
+          newFs = res.fs;
+          output = [...autoLines, res.output].join("\n");
+          break;
+        }
+        output = [
+          ...autoLines,
+          "\x1b[32m▸ Web Browser ready\x1b[0m",
+          "  Usage: browse <url>   or   open web-browser <url>",
+          "  The Browser panel in the Computer tab shows the same session.",
+        ].join("\n");
         break;
       }
-      const meta = APP_REGISTRY[target] ?? PACKAGE_REGISTRY[target];
-      const rest = args.slice(1).join(" ");
+
+      if (target === "editor" || target === "filesystem") {
+        const path = rest ? normalizePath(cwd, rest) : cwd;
+        const file = fs[path];
+        output = [
+          ...autoLines,
+          `\x1b[32m▸ Launching ${target}\x1b[0m → ${path}`,
+          file
+            ? file.type === "dir"
+              ? `  Directory open (${Object.keys(fs).filter((p) => p.startsWith(path + "/")).length} entries)`
+              : `  ${file.size} bytes, modified ${file.modified}`
+            : `  ${path}: not found yet — create it with: write ${rest || "file.txt"} <content>`,
+        ].join("\n");
+        break;
+      }
+
+      const meta = known;
       output = [
+        ...autoLines,
         `\x1b[32m▸ Launching ${target}\x1b[0m${rest ? ` with ${rest}` : ""}`,
         meta ? `  ${"name" in meta ? meta.name : target}: ${meta.description}` : "",
         `  Window opened on the agent desktop. Interact via its tools/commands.`,
@@ -690,6 +751,22 @@ export async function vmExecuteCommand(
         .join("\n");
       break;
     }
+
+    case "browse":
+    case "curl":
+    case "wget": {
+      const raw = args.find((a) => !a.startsWith("-"));
+      if (!raw) {
+        output = `${name}: missing URL. Usage: ${name} <url>`;
+        break;
+      }
+      const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+      const res = await vmBrowse(supabase, vmId, state, url);
+      newFs = res.fs;
+      output = res.output;
+      break;
+    }
+
 
     case "node":
     case "nodejs":
