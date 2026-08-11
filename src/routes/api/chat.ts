@@ -134,6 +134,7 @@ VIRTUAL COMPUTER — this is your PRIMARY workspace. It is a persistent,
   - vm_list_files({ path })    — list directory contents
   - vm_run_code({ code })      — execute JavaScript in your sandbox
   - vm_browse({ url })         — visit a public page and save a readable snapshot
+  - vm_open_app({ app, arg })  — install (if needed) and launch a VM app; app "web-browser" with arg=<url> opens a page
   Your workspace persists across the conversation. Use it to write docs, save
   research, run code, and organize files. The user watches your computer live
   in the chat cockpit and Computer view. Never claim it is unavailable just
