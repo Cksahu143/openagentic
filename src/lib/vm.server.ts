@@ -603,6 +603,7 @@ export async function vmExecuteCommand(
         "  date, whoami, uname, clear, help, neofetch, tree, find, grep",
         "  run js <code>       — execute JavaScript in the sandbox",
         "  runfile <path>      — execute a JavaScript file",
+        "  browse <url>        — open a page in the VM web browser (also: curl, wget)",
         "  preview <path>      — mark an HTML file as the current preview",
         "  profile [linux|windows|macos] — select shell compatibility profile",
         "  apps                — list installed apps & packages",
@@ -905,6 +906,7 @@ export async function vmExecuteCommand(
         "pwd", "ls", "cd", "cat", "echo", "mkdir", "touch", "rm", "cp", "mv", "write", "head",
         "tail", "wc", "date", "whoami", "uname", "clear", "help", "neofetch", "tree", "find",
         "grep", "apps", "run", "runfile", "preview", "profile", "install", "uninstall", "open",
+        "browse", "curl", "wget", "launch", "start",
         "ps", "env", "stat",
       ]);
       const target = args[0] ?? "";
