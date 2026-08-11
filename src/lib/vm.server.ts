@@ -14,6 +14,7 @@
  * Do not import this file from client code.
  */
 import { runJs } from "./code-runner.server";
+import { fetchUrl } from "./browser-fetch.server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // ── Types ────────────────────────────────────────────────────
