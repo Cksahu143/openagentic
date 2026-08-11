@@ -83,3 +83,5 @@ Current as of Milestone 9 completion pass.
 - End-to-end suite on Google / YouTube / Wikipedia / GitHub / dynamic
   sites requires a paired companion in a real Chrome; not runnable from
   the sandbox. Manual test plan is documented in `docs/M9_VERIFICATION.md`.
+
+- VM browser is reader-mode (HTTP fetch + HTML extraction), not a real headless Chromium: no JS execution, clicking, or logged-in sessions inside the VM tab.

@@ -14,6 +14,7 @@
  * Do not import this file from client code.
  */
 import { runJs } from "./code-runner.server";
+import { fetchUrl } from "./browser-fetch.server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 // ── Types ────────────────────────────────────────────────────
@@ -275,6 +276,64 @@ export async function vmWriteFile(
   await saveVMState(supabase, vmId, { fs: newFs });
   return { fs: newFs, ok: true };
 }
+
+/**
+ * The VM's web browser app. Fetches a public page, stores a readable
+ * snapshot in the VFS so both the agent and the user can re-open it, and
+ * returns terminal-friendly output.
+ */
+export async function vmBrowse(
+  supabase: SupabaseClient,
+  vmId: string,
+  state: VMState,
+  url: string,
+): Promise<{ fs: VFS; output: string; page: Awaited<ReturnType<typeof fetchUrl>> | null }> {
+  let page: Awaited<ReturnType<typeof fetchUrl>>;
+  try {
+    page = await fetchUrl(url);
+  } catch (e) {
+    return {
+      fs: state.fs,
+      output: `browse: ${url}: ${e instanceof Error ? e.message : String(e)}`,
+      page: null,
+    };
+  }
+
+  const snapshot = [
+    `# ${page.title || url}`,
+    "",
+    `Source: ${page.finalUrl} (HTTP ${page.status})`,
+    "",
+    page.text,
+    "",
+    "## Links",
+    ...page.links.slice(0, 40).map((l) => `- [${l.text}](${l.href})`),
+  ].join("\n");
+
+  const { fs } = await vmWriteFile(
+    supabase,
+    vmId,
+    state.fs,
+    "/home/agent/Downloads/browser-last.md",
+    snapshot,
+  );
+  state.fs = fs;
+
+  const output = [
+    `\x1b[32m▸ Web Browser\x1b[0m ${page.finalUrl} — HTTP ${page.status}`,
+    page.title ? `  title: ${page.title}` : "",
+    "",
+    page.text.slice(0, 2000) || "(no readable text)",
+    "",
+    `Saved snapshot → /home/agent/Downloads/browser-last.md (${page.links.length} links)`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return { fs, output, page };
+}
+
+
 
 export function vmReadFile(fs: VFS, path: string): { ok: boolean; content?: string; error?: string } {
   const full = normalizePath("/home/agent", path);
@@ -544,6 +603,7 @@ export async function vmExecuteCommand(
         "  date, whoami, uname, clear, help, neofetch, tree, find, grep",
         "  run js <code>       — execute JavaScript in the sandbox",
         "  runfile <path>      — execute a JavaScript file",
+        "  browse <url>        — open a page in the VM web browser (also: curl, wget)",
         "  preview <path>      — mark an HTML file as the current preview",
         "  profile [linux|windows|macos] — select shell compatibility profile",
         "  apps                — list installed apps & packages",
@@ -668,19 +728,80 @@ export async function vmExecuteCommand(
       break;
     }
 
-    case "open": {
+    case "open":
+    case "launch":
+    case "start": {
       const target = args[0];
       if (!target) {
-        output = `open: which app? Installed: ${state.installedApps.join(", ")}`;
+        output = [
+          `open: which app? Installed: ${state.installedApps.join(", ")}`,
+          `Available to install: ${Object.keys(PACKAGE_REGISTRY).join(", ")}`,
+        ].join("\n");
         break;
       }
+      // A URL opens the browser directly: `open https://example.com`
+      if (/^https?:\/\//i.test(target)) {
+        const res = await vmBrowse(supabase, vmId, state, target);
+        newFs = res.fs;
+        output = res.output;
+        break;
+      }
+
+      const known = APP_REGISTRY[target] ?? PACKAGE_REGISTRY[target];
+      const autoLines: string[] = [];
       if (!state.installedApps.includes(target)) {
-        output = `open: ${target} is not installed. Run: install ${target}`;
+        if (!known) {
+          output = `open: ${target} is not an app. Run 'install --list' to see what's available.`;
+          break;
+        }
+        // Auto-install known apps instead of dead-ending the agent.
+        const installed = new Set(state.installedApps);
+        installed.add(target);
+        for (const dep of PACKAGE_REGISTRY[target]?.provides ?? []) installed.add(dep);
+        const apps = Array.from(installed);
+        state.installedApps = apps;
+        await saveVMState(supabase, vmId, { installedApps: apps });
+        autoLines.push(`Installing ${target} ... done`);
+      }
+
+      const rest = args.slice(1).join(" ");
+
+      // Apps that actually do something when launched.
+      if (target === "web-browser") {
+        if (rest) {
+          const url = /^https?:\/\//i.test(rest) ? rest : `https://${rest}`;
+          const res = await vmBrowse(supabase, vmId, state, url);
+          newFs = res.fs;
+          output = [...autoLines, res.output].join("\n");
+          break;
+        }
+        output = [
+          ...autoLines,
+          "\x1b[32m▸ Web Browser ready\x1b[0m",
+          "  Usage: browse <url>   or   open web-browser <url>",
+          "  The Browser panel in the Computer tab shows the same session.",
+        ].join("\n");
         break;
       }
-      const meta = APP_REGISTRY[target] ?? PACKAGE_REGISTRY[target];
-      const rest = args.slice(1).join(" ");
+
+      if (target === "editor" || target === "filesystem") {
+        const path = rest ? normalizePath(cwd, rest) : cwd;
+        const file = fs[path];
+        output = [
+          ...autoLines,
+          `\x1b[32m▸ Launching ${target}\x1b[0m → ${path}`,
+          file
+            ? file.type === "dir"
+              ? `  Directory open (${Object.keys(fs).filter((p) => p.startsWith(path + "/")).length} entries)`
+              : `  ${file.size} bytes, modified ${file.modified}`
+            : `  ${path}: not found yet — create it with: write ${rest || "file.txt"} <content>`,
+        ].join("\n");
+        break;
+      }
+
+      const meta = known;
       output = [
+        ...autoLines,
         `\x1b[32m▸ Launching ${target}\x1b[0m${rest ? ` with ${rest}` : ""}`,
         meta ? `  ${"name" in meta ? meta.name : target}: ${meta.description}` : "",
         `  Window opened on the agent desktop. Interact via its tools/commands.`,
@@ -689,6 +810,22 @@ export async function vmExecuteCommand(
         .join("\n");
       break;
     }
+
+    case "browse":
+    case "curl":
+    case "wget": {
+      const raw = args.find((a) => !a.startsWith("-"));
+      if (!raw) {
+        output = `${name}: missing URL. Usage: ${name} <url>`;
+        break;
+      }
+      const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+      const res = await vmBrowse(supabase, vmId, state, url);
+      newFs = res.fs;
+      output = res.output;
+      break;
+    }
+
 
     case "node":
     case "nodejs":
@@ -769,6 +906,7 @@ export async function vmExecuteCommand(
         "pwd", "ls", "cd", "cat", "echo", "mkdir", "touch", "rm", "cp", "mv", "write", "head",
         "tail", "wc", "date", "whoami", "uname", "clear", "help", "neofetch", "tree", "find",
         "grep", "apps", "run", "runfile", "preview", "profile", "install", "uninstall", "open",
+        "browse", "curl", "wget", "launch", "start",
         "ps", "env", "stat",
       ]);
       const target = args[0] ?? "";

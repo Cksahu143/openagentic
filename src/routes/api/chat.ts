@@ -134,6 +134,7 @@ VIRTUAL COMPUTER — this is your PRIMARY workspace. It is a persistent,
   - vm_list_files({ path })    — list directory contents
   - vm_run_code({ code })      — execute JavaScript in your sandbox
   - vm_browse({ url })         — visit a public page and save a readable snapshot
+  - vm_open_app({ app, arg })  — install (if needed) and launch a VM app; app "web-browser" with arg=<url> opens a page
   Your workspace persists across the conversation. Use it to write docs, save
   research, run code, and organize files. The user watches your computer live
   in the chat cockpit and Computer view. Never claim it is unavailable just
@@ -925,6 +926,35 @@ const result = streamText({
                 }
               },
             }),
+            vm_open_app: tool({
+              description:
+                "Launch an app inside the virtual computer, auto-installing it first if needed. " +
+                "Apps: web-browser, editor, filesystem, code-runner, node, bun, deno, python3, typescript, git, curl, sqlite3, ffmpeg. " +
+                "Pass a URL as `arg` with app 'web-browser' to open a page.",
+              inputSchema: z.object({
+                app: z.string().min(1).max(60),
+                arg: z.string().max(500).optional(),
+              }),
+              execute: async ({ app, arg }) => {
+                try {
+                  if (!userId) return { ok: false, error: "Not authenticated." };
+                  await requirePermission(supabaseAdmin, userId, "computer:use");
+                  const vmState = await ensureVM(supabaseAdmin, userId, sessionId);
+                  const result = await vmExecuteCommand(
+                    supabaseAdmin,
+                    vmState.id,
+                    vmState,
+                    `open ${app}${arg ? ` ${arg}` : ""}`,
+                  );
+                  await appendTimeline("🪟", `opened ${app}`, { app, arg: arg ?? null });
+                  return { ok: true, app, output: result.output };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : String(e) };
+                }
+              },
+            }),
+
+
 
             // --- Sub-Agents ---
             spawn_subagent: tool({
